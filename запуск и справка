@@ -1,0 +1,7 @@
+.venv\Scripts\python main.py
+
+Кнопка «➕ Добавить чат вручную» в карточке каждой темы
+- Принимает любой формат:
+  - `@startup_global`
+  - `https://t.me/startup_global`
+  - `t.me/startup_global
