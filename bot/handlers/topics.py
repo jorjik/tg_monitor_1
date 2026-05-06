@@ -114,10 +114,16 @@ async def process_search_terms(message: Message, state: FSMContext, repo: Reposi
         return
     data = await state.get_data()
     topic_id = await repo.create_topic(user_tg_id, data["topic_name"], terms)
+    keywords = [term.strip().lower() for term in terms.split(",") if term.strip()]
+    added_keywords = 0
+    for keyword in keywords:
+        if await repo.add_keyword(user_tg_id, keyword, topic_id=topic_id):
+            added_keywords += 1
     await state.clear()
     await message.answer(
         f"✅ <b>Тема «{data['topic_name']}» создана!</b>\n\n"
-        f"Поисковые слова: {terms}\n\n"
+        f"Поисковые слова: {terms}\n"
+        f"Ключевых слов добавлено: {added_keywords}\n\n"
         "Нажмите <b>🔍 Собрать чаты</b> для первого прохода.",
         reply_markup=topic_detail_kb(topic_id),
         parse_mode="HTML",
