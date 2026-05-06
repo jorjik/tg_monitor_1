@@ -2,6 +2,7 @@
 """bootstrap.py — создаёт все файлы проекта. Запустить: python bootstrap.py"""
 
 import os
+import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -13,6 +14,12 @@ def w(path, content):
         f.write(content.lstrip("\n"))
     print(f"  + {path}")
 
+
+if "--force" not in sys.argv:
+    raise SystemExit(
+        "bootstrap.py устарел и перезаписывает рабочий multi-user проект. "
+        "Если точно нужно восстановить старый шаблон, запустите: python bootstrap.py --force"
+    )
 
 print("Создание файлов проекта...\n")
 os.makedirs(os.path.join(ROOT, "data"), exist_ok=True)

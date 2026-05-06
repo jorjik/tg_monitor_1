@@ -11,13 +11,13 @@ from userbot.collector import GEO_EXCLUDE_DEFAULT
 router = Router()
 
 
-async def _get_words(repo: Repository) -> list[str]:
-    raw = await repo.get_setting("geo_exclude", GEO_EXCLUDE_DEFAULT)
+async def _get_words(repo: Repository, user_tg_id: int) -> list[str]:
+    raw = await repo.get_setting("geo_exclude", GEO_EXCLUDE_DEFAULT, user_tg_id=user_tg_id)
     return sorted({w.strip() for w in raw.split(",") if w.strip()})
 
 
-async def _show_filter(msg, repo: Repository, edit: bool = False):
-    words = await _get_words(repo)
+async def _show_filter(msg, repo: Repository, user_tg_id: int, edit: bool = False):
+    words = await _get_words(repo, user_tg_id)
     text = (
         f"🚫 <b>Гео-фильтр</b>\n\n"
         f"При сборе чатов (Проход 1) исключаются чаты, "
@@ -38,7 +38,7 @@ async def _show_filter(msg, repo: Repository, edit: bool = False):
 @router.message(F.text == "🚫 Гео-фильтр")
 @router.message(Command("geo_filter"))
 async def cmd_geo_filter(message: Message, repo: Repository):
-    await _show_filter(message, repo, edit=False)
+    await _show_filter(message, repo, message.from_user.id, edit=False)
 
 
 @router.callback_query(F.data == "geo_add")
@@ -61,32 +61,35 @@ async def process_geo_add(message: Message, state: FSMContext, repo: Repository)
         await message.answer("❌ Пустое слово.")
         return
 
-    words = await _get_words(repo)
+    user_tg_id = message.from_user.id
+    words = await _get_words(repo, user_tg_id)
     if word in words:
         await message.answer(f"⚠️ «{word}» уже есть в фильтре.")
     else:
         words.append(word)
-        await repo.set_setting("geo_exclude", ",".join(words))
+        await repo.set_setting("geo_exclude", ",".join(words), user_tg_id=user_tg_id)
         await message.answer(f"✅ «{word}» добавлено в гео-фильтр.")
 
-    await _show_filter(message, repo, edit=False)
+    await _show_filter(message, repo, user_tg_id, edit=False)
 
 
 @router.callback_query(F.data.startswith("geo_del:"))
 async def cb_geo_del(callback: CallbackQuery, repo: Repository):
     word = callback.data.split(":", 1)[1]
-    words = await _get_words(repo)
+    user_tg_id = callback.from_user.id
+    words = await _get_words(repo, user_tg_id)
     if word in words:
         words.remove(word)
-        await repo.set_setting("geo_exclude", ",".join(words))
+        await repo.set_setting("geo_exclude", ",".join(words), user_tg_id=user_tg_id)
         await callback.answer(f"🗑 «{word}» удалено")
     else:
         await callback.answer("Слово не найдено")
-    await _show_filter(callback.message, repo, edit=True)
+    await _show_filter(callback.message, repo, user_tg_id, edit=True)
 
 
 @router.callback_query(F.data == "geo_reset")
 async def cb_geo_reset(callback: CallbackQuery, repo: Repository):
-    await repo.set_setting("geo_exclude", GEO_EXCLUDE_DEFAULT)
+    user_tg_id = callback.from_user.id
+    await repo.set_setting("geo_exclude", GEO_EXCLUDE_DEFAULT, user_tg_id=user_tg_id)
     await callback.answer("🔄 Сброшено к умолчаниям")
-    await _show_filter(callback.message, repo, edit=True)
+    await _show_filter(callback.message, repo, user_tg_id, edit=True)

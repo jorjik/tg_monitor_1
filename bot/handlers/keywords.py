@@ -13,7 +13,8 @@ router = Router()
 @router.message(F.text == "🔑 Ключевые слова")
 @router.message(Command("keywords"))
 async def cmd_keywords(message: Message, repo: Repository):
-    kws = await repo.get_keywords(topic_id=None)
+    user_tg_id = message.from_user.id
+    kws = await repo.get_keywords(user_tg_id, topic_id=None)
     active = sum(1 for k in kws if k["is_active"])
     await message.answer(
         f"🔑 <b>Глобальные ключевые слова</b>\n"
@@ -25,8 +26,9 @@ async def cmd_keywords(message: Message, repo: Repository):
 
 @router.callback_query(F.data.startswith("kw_topic:"))
 async def cb_kw_topic(callback: CallbackQuery, repo: Repository):
+    user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
-    kws = await repo.get_keywords(topic_id=topic_id)
+    kws = await repo.get_keywords(user_tg_id, topic_id=topic_id)
     active = sum(1 for k in kws if k["is_active"])
     await callback.message.edit_text(
         f"🔑 <b>Ключевые слова темы</b>\n"
@@ -38,13 +40,17 @@ async def cb_kw_topic(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data.startswith("toggle_kw:"))
 async def cb_toggle_kw(callback: CallbackQuery, repo: Repository):
-    kw_id = int(callback.data.split(":")[1])
-    new_state = await repo.toggle_keyword(kw_id)
+    parts = callback.data.split(":")
+    kw_id = int(parts[1])
+    scope = parts[2] if len(parts) > 2 else "global"
+    user_tg_id = callback.from_user.id
+    topic_id = None if scope == "global" else int(scope)
+    new_state = await repo.toggle_keyword(user_tg_id, kw_id)
     await callback.answer("✅ Включено" if new_state else "⭕ Выключено")
-    kws = await repo.get_keywords(topic_id=None)
+    kws = await repo.get_keywords(user_tg_id, topic_id=topic_id)
     try:
         await callback.message.edit_reply_markup(
-            reply_markup=keywords_kb(kws, topic_id=None)
+            reply_markup=keywords_kb(kws, topic_id=topic_id)
         )
     except Exception:
         pass
@@ -66,6 +72,7 @@ async def cb_add_kw_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(KeywordForm.waiting_keyword)
 async def process_keyword(message: Message, state: FSMContext, repo: Repository):
+    user_tg_id = message.from_user.id
     word = message.text.strip().lower()
     if not word:
         await message.answer("❌ Пустое слово.")
@@ -73,7 +80,7 @@ async def process_keyword(message: Message, state: FSMContext, repo: Repository)
     data = await state.get_data()
     topic_id = data.get("kw_topic_id")
     await state.clear()
-    added = await repo.add_keyword(word, topic_id=topic_id)
+    added = await repo.add_keyword(user_tg_id, word, topic_id=topic_id)
     scope = "глобально" if topic_id is None else f"для темы #{topic_id}"
     if added:
         await message.answer(
@@ -81,7 +88,7 @@ async def process_keyword(message: Message, state: FSMContext, repo: Repository)
         )
     else:
         await message.answer(f"⚠️ Слово «{word}» уже существует.")
-    kws = await repo.get_keywords(topic_id=topic_id)
+    kws = await repo.get_keywords(user_tg_id, topic_id=topic_id)
     active = sum(1 for k in kws if k["is_active"])
     await message.answer(
         f"🔑 Слов: {len(kws)} (активных: {active})",

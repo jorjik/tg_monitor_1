@@ -86,9 +86,10 @@ def keywords_kb(
     keywords: list[dict], topic_id: int | None = None
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
+    scope = "global" if topic_id is None else str(topic_id)
     for kw in keywords:
         icon = "✅" if kw["is_active"] else "⭕"
-        b.button(text=f"{icon} {kw['word']}", callback_data=f"toggle_kw:{kw['id']}")
+        b.button(text=f"{icon} {kw['word']}", callback_data=f"toggle_kw:{kw['id']}:{scope}")
     b.adjust(2)
     suffix = f":{topic_id}" if topic_id is not None else ":global"
     b.row(InlineKeyboardButton(text="➕ Добавить", callback_data=f"add_kw{suffix}"))
@@ -155,10 +156,6 @@ def geo_filter_kb(words: list[str]) -> InlineKeyboardMarkup:
 
 def monitor_kb(is_running: bool) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    if is_running:
-        b.button(text="⏹ Остановить мониторинг", callback_data="monitor:stop")
-    else:
-        b.button(text="▶️ Запустить мониторинг", callback_data="monitor:start")
     b.button(text="🔄 Обновить статус", callback_data="monitor:status")
     b.adjust(1)
     return b.as_markup()

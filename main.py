@@ -14,7 +14,6 @@ from telethon.sessions import StringSession
 
 from bot.handlers import common, feed, geo_filter, keywords, monitor, topics
 from core.config import (
-    ADMIN_USER_ID,
     API_HASH,
     API_ID,
     BOT_TOKEN,
@@ -43,7 +42,6 @@ def _check_config() -> None:
         "API_ID": API_ID,
         "API_HASH": API_HASH,
         "BOT_TOKEN": BOT_TOKEN,
-        "ADMIN_USER_ID": ADMIN_USER_ID,
     }
     if not SESSION_STRING:
         required["PHONE"] = PHONE
@@ -86,7 +84,8 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
 
     collector = ChatCollector(client=userbot, repo=repo)
-    watcher = MessageWatcher(client=userbot, repo=repo, bot=bot, admin_id=ADMIN_USER_ID)
+    watcher = MessageWatcher(client=userbot, repo=repo, bot=bot)
+    await watcher.start()
 
     dp["repo"] = repo
     dp["collector"] = collector
