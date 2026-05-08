@@ -1,3 +1,5 @@
+import html
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -9,6 +11,43 @@ from db.repository import Repository
 from userbot.collector import GEO_EXCLUDE_DEFAULT, ChatCollector
 
 router = Router()
+CONTROL_TEXTS = {
+    "📋 Темы",
+    "➕ Новая тема",
+    "🔑 Ключевые слова",
+    "📰 Лента",
+    "⚙️ Мониторинг",
+    "🚫 Гео-фильтр",
+    "❓ Помощь",
+}
+
+
+def _is_control_text(value: str) -> bool:
+    text = value.strip()
+    return text in CONTROL_TEXTS or text.startswith("/")
+
+
+def _split_search_terms(value: str) -> list[str]:
+    return list(
+        dict.fromkeys(
+            t.strip() for t in value.split(",") if t.strip() and not _is_control_text(t)
+        )
+    )
+
+
+def _collection_terms(topic: dict) -> tuple[list[str], str]:
+    terms = _split_search_terms(topic.get("search_terms") or "")
+    if terms:
+        return terms, "поисковые слова"
+    name = (topic.get("name") or "").strip()
+    return ([name] if name else []), "название темы"
+
+
+def _terms_preview(terms: list[str], limit: int = 5) -> str:
+    preview = ", ".join(terms[:limit])
+    if len(terms) > limit:
+        preview += f" и ещё {len(terms) - limit}"
+    return preview
 
 
 @router.message(F.text == "📋 Темы")
@@ -62,9 +101,14 @@ async def cb_topic_detail(callback: CallbackQuery, repo: Repository, state: FSMC
         return
     chats = await repo.get_chats(user_tg_id, topic_id)
     active = sum(1 for c in chats if c["is_active"])
+    terms, terms_source = _collection_terms(topic)
+    if terms_source == "поисковые слова":
+        search_text = _terms_preview(terms, limit=8)
+    else:
+        search_text = f"не заданы, сбор по названию темы «{topic['name']}»"
     text = (
-        f"📂 <b>Тема: {topic['name']}</b>\n\n"
-        f"🔍 Поисковые слова: {topic['search_terms']}\n"
+        f"📂 <b>Тема: {html.escape(topic['name'])}</b>\n\n"
+        f"🔍 Поисковые слова: {html.escape(search_text)}\n"
         f"💬 Чатов: {len(chats)} (активных: {active})"
     )
     await callback.message.edit_text(
@@ -87,20 +131,23 @@ async def cmd_new_topic(message: Message, state: FSMContext):
 @router.message(TopicForm.waiting_name)
 async def process_topic_name(message: Message, state: FSMContext, repo: Repository):
     user_tg_id = message.from_user.id
-    name = message.text.strip()
+    name = (message.text or "").strip()
+    if _is_control_text(name):
+        await message.answer("Введите название темы текстом или нажмите ❌ Отмена.")
+        return
     if len(name) < 2:
         await message.answer("❌ Слишком короткое название.")
         return
     if await repo.get_topic_by_name(user_tg_id, name):
-        await message.answer(f"⚠️ Тема «{name}» уже существует.")
+        await message.answer(f"⚠️ Тема «{html.escape(name)}» уже существует.", parse_mode="HTML")
         return
     await state.update_data(topic_name=name)
     await state.set_state(TopicForm.waiting_search_terms)
     await message.answer(
-        f"✅ Название: <b>{name}</b>\n\n"
+        f"✅ Название: <b>{html.escape(name)}</b>\n\n"
         "Введите <b>поисковые слова</b> через запятую.\n"
         "Напр: <code>стартап, инвестиции, франшиза</code>\n\n"
-        "Или нажмите <b>⏭ Пропустить</b>, чтобы добавить слова позже.",
+        "Или нажмите <b>⏭ Пропустить</b> — тогда первый сбор попробует искать по названию темы.",
         reply_markup=skip_topic_terms_kb(),
         parse_mode="HTML",
     )
@@ -109,21 +156,22 @@ async def process_topic_name(message: Message, state: FSMContext, repo: Reposito
 @router.message(TopicForm.waiting_search_terms)
 async def process_search_terms(message: Message, state: FSMContext, repo: Repository):
     user_tg_id = message.from_user.id
-    terms = message.text.strip()
-    if not terms:
+    terms_list = _split_search_terms(message.text or "")
+    if not terms_list:
         await message.answer("❌ Введите хотя бы одно слово.")
         return
+    terms = ", ".join(terms_list)
     data = await state.get_data()
     topic_id = await repo.create_topic(user_tg_id, data["topic_name"], terms)
-    keywords = [term.strip().lower() for term in terms.split(",") if term.strip()]
+    keywords = [term.lower() for term in terms_list]
     added_keywords = 0
     for keyword in keywords:
         if await repo.add_keyword(user_tg_id, keyword, topic_id=topic_id):
             added_keywords += 1
     await state.clear()
     await message.answer(
-        f"✅ <b>Тема «{data['topic_name']}» создана!</b>\n\n"
-        f"Поисковые слова: {terms}\n"
+        f"✅ <b>Тема «{html.escape(data['topic_name'])}» создана!</b>\n\n"
+        f"Поисковые слова: {html.escape(terms)}\n"
         f"Ключевых слов добавлено: {added_keywords}\n\n"
         "Нажмите <b>🔍 Собрать чаты</b> для первого прохода.",
         reply_markup=topic_detail_kb(topic_id),
@@ -138,7 +186,8 @@ async def cb_skip_search_terms(callback: CallbackQuery, state: FSMContext, repo:
     topic_id = await repo.create_topic(user_tg_id, data["topic_name"], "")
     await state.clear()
     await callback.message.answer(
-        f"✅ <b>Тема «{data['topic_name']}» создана без ключевых слов.</b>\n\n"
+        f"✅ <b>Тема «{html.escape(data['topic_name'])}» создана без ключевых слов.</b>\n\n"
+        "При сборе чатов бот попробует искать по названию темы.\n"
         "Ключевые слова можно добавить позже в разделе темы или через главное меню.",
         reply_markup=topic_detail_kb(topic_id),
         parse_mode="HTML",
@@ -157,7 +206,7 @@ async def cb_delete_topic(callback: CallbackQuery, repo: Repository):
     await repo.delete_topic(user_tg_id, topic_id)
     topics = await repo.get_topics(user_tg_id)
     await callback.message.edit_text(
-        f"🗑 Тема «{topic['name']}» удалена.\n\n📂 <b>Темы</b> ({len(topics)}):",
+        f"🗑 Тема «{html.escape(topic['name'])}» удалена.\n\n📂 <b>Темы</b> ({len(topics)}):",
         reply_markup=topics_kb(topics),
         parse_mode="HTML",
     )
@@ -174,10 +223,18 @@ async def cb_collect(
     if not topic:
         await callback.answer("Тема не найдена", show_alert=True)
         return
-    terms = [t.strip() for t in topic["search_terms"].split(",") if t.strip()]
+    terms, terms_source = _collection_terms(topic)
+    if not terms:
+        await callback.answer("Нет поисковых слов для сбора", show_alert=True)
+        return
+    terms_text = html.escape(_terms_preview(terms))
     msg = await callback.message.edit_text(
         f"🔍 <b>Проход 1: Сбор чатов</b>\n\n"
-        f"Тема: {topic['name']}\nСлов: {len(terms)}\n\n⏳ Начинаю...",
+        f"Тема: {html.escape(topic['name'])}\n"
+        f"Источник: {terms_source}\n"
+        f"Ищу: <code>{terms_text}</code>\n"
+        f"Слов: {len(terms)}\n\n"
+        "⏳ Начинаю...",
         parse_mode="HTML",
     )
     await callback.answer()
@@ -191,7 +248,7 @@ async def cb_collect(
             await msg.edit_text(
                 f"🔍 <b>Проход 1: Сбор чатов</b>\n\n"
                 f"Прогресс: {current}/{total}\n"
-                f"🔎 Ищу: «{term}»\n"
+                f"🔎 Ищу: «{html.escape(term)}»\n"
                 f"Найдено: {found_cnt} | Отфильтровано: {excl_cnt}",
                 parse_mode="HTML",
             )
@@ -208,7 +265,8 @@ async def cb_collect(
     chats = await repo.get_chats(user_tg_id, topic_id)
     await msg.edit_text(
         f"✅ <b>Сбор завершён!</b>\n\n"
-        f"Тема: <b>{topic['name']}</b>\n"
+        f"Тема: <b>{html.escape(topic['name'])}</b>\n"
+        f"Искал по: <code>{terms_text}</code>\n"
         f"Найдено чатов: <b>{len(chats)}</b>\n\n"
         "Выберите какие чаты мониторить.",
         reply_markup=topic_detail_kb(topic_id),
