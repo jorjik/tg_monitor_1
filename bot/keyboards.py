@@ -165,3 +165,11 @@ def cancel_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="❌ Отмена", callback_data="cancel")
     return b.as_markup()
+
+
+def skip_topic_terms_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="⏭ Пропустить", callback_data="topic_terms:skip")
+    b.button(text="❌ Отмена", callback_data="cancel")
+    b.adjust(1)
+    return b.as_markup()

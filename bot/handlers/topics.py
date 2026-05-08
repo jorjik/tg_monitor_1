@@ -3,7 +3,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.keyboards import cancel_kb, chats_kb, topic_detail_kb, topics_kb
+from bot.keyboards import cancel_kb, chats_kb, skip_topic_terms_kb, topic_detail_kb, topics_kb
 from bot.states import TopicForm
 from db.repository import Repository
 from userbot.collector import GEO_EXCLUDE_DEFAULT, ChatCollector
@@ -99,8 +99,9 @@ async def process_topic_name(message: Message, state: FSMContext, repo: Reposito
     await message.answer(
         f"✅ Название: <b>{name}</b>\n\n"
         "Введите <b>поисковые слова</b> через запятую.\n"
-        "Напр: <code>стартап, инвестиции, франшиза</code>",
-        reply_markup=cancel_kb(),
+        "Напр: <code>стартап, инвестиции, франшиза</code>\n\n"
+        "Или нажмите <b>⏭ Пропустить</b>, чтобы добавить слова позже.",
+        reply_markup=skip_topic_terms_kb(),
         parse_mode="HTML",
     )
 
@@ -128,6 +129,21 @@ async def process_search_terms(message: Message, state: FSMContext, repo: Reposi
         reply_markup=topic_detail_kb(topic_id),
         parse_mode="HTML",
     )
+
+
+@router.callback_query(TopicForm.waiting_search_terms, F.data == "topic_terms:skip")
+async def cb_skip_search_terms(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    user_tg_id = callback.from_user.id
+    data = await state.get_data()
+    topic_id = await repo.create_topic(user_tg_id, data["topic_name"], "")
+    await state.clear()
+    await callback.message.answer(
+        f"✅ <b>Тема «{data['topic_name']}» создана без ключевых слов.</b>\n\n"
+        "Ключевые слова можно добавить позже в разделе темы или через главное меню.",
+        reply_markup=topic_detail_kb(topic_id),
+        parse_mode="HTML",
+    )
+    await callback.answer("Пропущено")
 
 
 @router.callback_query(F.data.startswith("del_topic:"))
