@@ -163,6 +163,11 @@ class BillingKeyboardTest(unittest.TestCase):
 
         self.assertEqual(rows, [["💳 Подписка"], ["❓ Помощь"]])
 
+    def test_accessible_main_menu_shows_history_for_regular_user(self):
+        buttons = [button.text for row in main_menu_kb(is_admin=False, has_access=True).keyboard for button in row]
+
+        self.assertIn("🕘 История", buttons)
+
     def test_subscription_and_admin_tariff_keyboards(self):
         tariffs = [{"id": 1, "name": "Месяц", "stars": 100, "duration_days": 30, "is_active": 1}]
 

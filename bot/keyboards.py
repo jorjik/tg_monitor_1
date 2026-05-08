@@ -25,7 +25,8 @@ def main_menu_kb(is_admin: bool = False, has_access: bool = True) -> ReplyKeyboa
         keyboard.append([KeyboardButton(text="🕘 История"), KeyboardButton(text="💎 Тарифы")])
         keyboard.append([KeyboardButton(text="❓ Помощь")])
     else:
-        keyboard.append([KeyboardButton(text="💳 Подписка"), KeyboardButton(text="❓ Помощь")])
+        keyboard.append([KeyboardButton(text="🕘 История"), KeyboardButton(text="💳 Подписка")])
+        keyboard.append([KeyboardButton(text="❓ Помощь")])
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,

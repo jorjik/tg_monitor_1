@@ -7,9 +7,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.access import require_callback_access, require_message_access
 from bot.keyboards import history_interval_kb
 from bot.states import HistoryForm
-from core.config import ADMIN_USER_ID
 from db.repository import Repository
 from userbot.collector import ChatCollector
 from userbot.history import (
@@ -21,10 +21,6 @@ from userbot.history import (
 
 router = Router()
 logger = logging.getLogger(__name__)
-
-
-def _is_admin(user_tg_id: int) -> bool:
-    return bool(ADMIN_USER_ID and user_tg_id == ADMIN_USER_ID)
 
 
 async def _callback_answer_message(callback: CallbackQuery, text: str, **kwargs) -> Message:
@@ -88,10 +84,9 @@ def _result_summary(
 @router.message(F.text == "🕘 История")
 @router.message(Command("history"))
 async def cmd_history(message: Message, state: FSMContext, repo: Repository):
-    user_tg_id = message.from_user.id
-    if not _is_admin(user_tg_id):
-        await message.answer("Эта функция доступна только администратору.")
+    if not await require_message_access(message, repo):
         return
+    user_tg_id = message.from_user.id
     chats = await repo.get_history_chats(user_tg_id)
     if not chats:
         await message.answer("⚠️ Нет активных чатов для разового поиска истории.")
@@ -114,11 +109,10 @@ async def cmd_history(message: Message, state: FSMContext, repo: Repository):
 async def process_history_interval(
     callback: CallbackQuery, state: FSMContext, repo: Repository, collector: ChatCollector
 ):
-    user_tg_id = callback.from_user.id
-    if not _is_admin(user_tg_id):
-        await callback.answer("Эта функция доступна только администратору.", show_alert=True)
+    if not await require_callback_access(callback, repo):
         await state.clear()
         return
+    user_tg_id = callback.from_user.id
     interval_value = (callback.data or "").partition(":")[2]
     try:
         start, end = parse_history_interval(interval_value)

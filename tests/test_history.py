@@ -153,14 +153,14 @@ class HistoryScannerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class HistoryKeyboardTest(unittest.TestCase):
-    def test_history_button_is_admin_only_in_main_menu(self):
+    def test_history_button_is_available_in_main_menu(self):
         admin_buttons = [
             button.text for row in main_menu_kb(is_admin=True).keyboard for button in row
         ]
         user_buttons = [button.text for row in main_menu_kb().keyboard for button in row]
 
         self.assertIn("🕘 История", admin_buttons)
-        self.assertNotIn("🕘 История", user_buttons)
+        self.assertIn("🕘 История", user_buttons)
 
     def test_history_interval_keyboard_has_only_two_choices(self):
         buttons = [
