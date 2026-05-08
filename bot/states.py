@@ -9,6 +9,7 @@ class TopicForm(StatesGroup):
 
 class KeywordForm(StatesGroup):
     waiting_keyword = State()
+    waiting_confirm_keywords = State()
 
 
 class GeoFilterForm(StatesGroup):

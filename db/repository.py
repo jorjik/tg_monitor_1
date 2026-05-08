@@ -404,6 +404,35 @@ class Repository:
             except aiosqlite.IntegrityError:
                 return False
 
+    async def add_keywords(
+        self, user_tg_id: int, words: list[str], topic_id: Optional[int] = None
+    ) -> tuple[int, int]:
+        async with aiosqlite.connect(self.db_path) as db:
+            if topic_id is not None:
+                cur = await db.execute(
+                    "SELECT 1 FROM topics WHERE id = ? AND user_tg_id = ?",
+                    (topic_id, user_tg_id),
+                )
+                if not await cur.fetchone():
+                    return 0, len(words)
+            added = 0
+            for word in words:
+                if topic_id is None:
+                    cur = await db.execute(
+                        "INSERT OR IGNORE INTO keywords (user_tg_id, word, topic_id) "
+                        "VALUES (?, LOWER(?), NULL)",
+                        (user_tg_id, word.strip()),
+                    )
+                else:
+                    cur = await db.execute(
+                        "INSERT OR IGNORE INTO keywords (user_tg_id, word, topic_id) "
+                        "VALUES (?, LOWER(?), ?)",
+                        (user_tg_id, word.strip(), topic_id),
+                    )
+                added += cur.rowcount
+            await db.commit()
+            return added, len(words) - added
+
     async def get_keywords(
         self, user_tg_id: int, topic_id: Optional[int] = None
     ) -> list[dict]:
