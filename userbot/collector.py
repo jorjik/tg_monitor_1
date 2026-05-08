@@ -13,7 +13,7 @@ from telethon.tl.types import Channel, Chat
 
 logger = logging.getLogger(__name__)
 
-# Слова-маркеры РФ-географии — чаты с ними в названии исключаются по умолчанию
+# Слова-маркеры РФ-географии для кнопки «Убрать Гео РФ»
 GEO_EXCLUDE_DEFAULT = ",".join(
     [
         "рф",

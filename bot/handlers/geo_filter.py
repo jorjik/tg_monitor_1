@@ -12,19 +12,26 @@ router = Router()
 
 
 async def _get_words(repo: Repository, user_tg_id: int) -> list[str]:
-    raw = await repo.get_setting("geo_exclude", GEO_EXCLUDE_DEFAULT, user_tg_id=user_tg_id)
+    raw = await repo.get_setting("geo_exclude", "", user_tg_id=user_tg_id)
     return sorted({w.strip() for w in raw.split(",") if w.strip()})
 
 
 async def _show_filter(msg, repo: Repository, user_tg_id: int, edit: bool = False):
     words = await _get_words(repo, user_tg_id)
-    text = (
-        f"🚫 <b>Гео-фильтр</b>\n\n"
-        f"При сборе чатов (Проход 1) исключаются чаты, "
-        f"у которых в названии есть одно из этих слов.\n\n"
-        f"Слов в фильтре: <b>{len(words)}</b>\n"
-        f"Нажмите 🗑 на слово чтобы удалить его:"
-    )
+    if words:
+        text = (
+            f"🚫 <b>Гео-фильтр</b>\n\n"
+            f"При сборе чатов (Проход 1) исключаются чаты, "
+            f"у которых в названии есть одно из этих слов.\n\n"
+            f"Слов в фильтре: <b>{len(words)}</b>\n"
+            f"Нажмите 🗑 на слово чтобы удалить его:"
+        )
+    else:
+        text = (
+            f"🚫 <b>Гео-фильтр</b>\n\n"
+            f"Сейчас гео-фильтр выключен: при сборе чатов география не исключается.\n\n"
+            f"Нажмите <b>🚫 Убрать Гео РФ</b>, чтобы включить текущий набор РФ-маркеров."
+        )
     kb = geo_filter_kb(words)
     if edit:
         try:
@@ -87,9 +94,17 @@ async def cb_geo_del(callback: CallbackQuery, repo: Repository):
     await _show_filter(callback.message, repo, user_tg_id, edit=True)
 
 
+@router.callback_query(F.data == "geo_rf")
+async def cb_geo_rf(callback: CallbackQuery, repo: Repository):
+    user_tg_id = callback.from_user.id
+    await repo.set_setting("geo_exclude", GEO_EXCLUDE_DEFAULT, user_tg_id=user_tg_id)
+    await callback.answer("🚫 Гео РФ будет исключаться")
+    await _show_filter(callback.message, repo, user_tg_id, edit=True)
+
+
 @router.callback_query(F.data == "geo_reset")
 async def cb_geo_reset(callback: CallbackQuery, repo: Repository):
     user_tg_id = callback.from_user.id
-    await repo.set_setting("geo_exclude", GEO_EXCLUDE_DEFAULT, user_tg_id=user_tg_id)
-    await callback.answer("🔄 Сброшено к умолчаниям")
+    await repo.set_setting("geo_exclude", "", user_tg_id=user_tg_id)
+    await callback.answer("🧹 Гео-фильтр очищен")
     await _show_filter(callback.message, repo, user_tg_id, edit=True)

@@ -150,8 +150,9 @@ def geo_filter_kb(words: list[str]) -> InlineKeyboardMarkup:
         b.button(text=f"🗑 {w}", callback_data=f"geo_del:{w}")
     b.adjust(3)
     b.row(InlineKeyboardButton(text="➕ Добавить слово", callback_data="geo_add"))
+    b.row(InlineKeyboardButton(text="🚫 Убрать Гео РФ", callback_data="geo_rf"))
     b.row(
-        InlineKeyboardButton(text="🔄 Сбросить к умолчаниям", callback_data="geo_reset")
+        InlineKeyboardButton(text="🧹 Сбросить всё", callback_data="geo_reset")
     )
     b.row(InlineKeyboardButton(text="◀️ Меню", callback_data="main_menu"))
     return b.as_markup()

@@ -241,7 +241,7 @@ async def cb_collect(
     await callback.answer()
 
     # Загружаем гео-фильтр из настроек
-    raw_exclude = await repo.get_setting("geo_exclude", GEO_EXCLUDE_DEFAULT, user_tg_id=user_tg_id)
+    raw_exclude = await repo.get_setting("geo_exclude", "", user_tg_id=user_tg_id)
     exclude_words = [w.strip() for w in raw_exclude.split(",") if w.strip()]
 
     async def on_progress(current, total, term, found_cnt, excl_cnt):
