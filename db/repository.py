@@ -328,6 +328,18 @@ class Repository:
             )
             return [dict(r) for r in await cur.fetchall()]
 
+    async def get_chat(self, user_tg_id: int, topic_id: int, chat_id: int) -> Optional[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT c.* FROM chats c "
+                "JOIN topics t ON t.id = c.topic_id "
+                "WHERE c.id = ? AND c.topic_id = ? AND t.user_tg_id = ?",
+                (chat_id, topic_id, user_tg_id),
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
     async def get_active_chats(self, user_tg_id: int) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -458,6 +470,18 @@ class Repository:
             cur = await db.execute(
                 "SELECT word FROM keywords WHERE user_tg_id = ? AND is_active = 1",
                 (user_tg_id,),
+            )
+            return [r[0] for r in await cur.fetchall()]
+
+    async def get_active_keywords_for_topic(self, user_tg_id: int, topic_id: int) -> list[str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT DISTINCT k.word FROM keywords k "
+                "LEFT JOIN topics t ON t.id = k.topic_id "
+                "WHERE k.user_tg_id = ? AND k.is_active = 1 "
+                "AND (k.topic_id IS NULL OR (k.topic_id = ? AND t.user_tg_id = ?)) "
+                "ORDER BY k.word",
+                (user_tg_id, topic_id, user_tg_id),
             )
             return [r[0] for r in await cur.fetchall()]
 

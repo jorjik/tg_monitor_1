@@ -7,8 +7,10 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.keyboards import cancel_kb, chats_kb, skip_topic_terms_kb, topic_detail_kb, topics_kb
 from bot.states import TopicForm
+from core.config import ADMIN_USER_ID
 from db.repository import Repository
 from userbot.collector import GEO_EXCLUDE_DEFAULT, ChatCollector
+from userbot.history import MAX_HISTORY_MESSAGES, HistoryScanner, parse_history_interval
 
 router = Router()
 CONTROL_TEXTS = {
@@ -25,6 +27,10 @@ CONTROL_TEXTS = {
 def _is_control_text(value: str) -> bool:
     text = value.strip()
     return text in CONTROL_TEXTS or text.startswith("/")
+
+
+def _is_admin(user_tg_id: int) -> bool:
+    return bool(ADMIN_USER_ID and user_tg_id == ADMIN_USER_ID)
 
 
 def _split_search_terms(value: str) -> list[str]:
@@ -48,6 +54,37 @@ def _terms_preview(terms: list[str], limit: int = 5) -> str:
     if len(terms) > limit:
         preview += f" и ещё {len(terms) - limit}"
     return preview
+
+
+def _history_result_text(chat: dict, start, end, result) -> str:
+    lines = [
+        "✅ <b>Просмотр истории завершён</b>",
+        "",
+        f"💬 <b>Чат:</b> {html.escape(chat['title'])}",
+        f"🕒 <b>Интервал:</b> <code>{start:%Y-%m-%d %H:%M} — {end:%Y-%m-%d %H:%M}</code>",
+        f"🔑 <b>Ключевых слов:</b> {len(result.keywords)}",
+        f"📖 <b>Проверено сообщений:</b> {result.scanned}",
+        f"🎯 <b>Совпадений:</b> {result.matched}",
+        f"📰 <b>Добавлено в ленту:</b> {result.saved}",
+    ]
+    if result.limit_reached:
+        lines.append(f"⚠️ Достигнут лимит {MAX_HISTORY_MESSAGES} сообщений.")
+    if not result.keywords:
+        lines.append("⚠️ Нет активных ключевых слов для этой темы.")
+    if result.preview:
+        lines.extend(["", "<b>Первые совпадения:</b>"])
+        for item in result.preview:
+            keywords = ", ".join(f"«{html.escape(k)}»" for k in item.matched_keywords)
+            preview = html.escape(" ".join(item.text.split())[:220])
+            if len(item.text) > 220:
+                preview += "…"
+            saved_icon = "🆕" if item.saved else "↩️"
+            lines.append(
+                f"{saved_icon} <a href=\"{item.url}\">{item.date:%Y-%m-%d %H:%M}</a> "
+                f"{keywords}\n"
+                f"{html.escape(item.sender_name)}: {preview}"
+            )
+    return "\n".join(lines)
 
 
 @router.message(F.text == "📋 Темы")
@@ -324,8 +361,9 @@ async def _refresh_chats(
         await callback.message.edit_text(
             f"💬 <b>Чаты «{topic['name']}»</b>\n"
             f"Всего: {len(chats)} | Активных: {active}\n\n"
-            "✅ — мониторится | ⭕ — выключен",
-            reply_markup=chats_kb(chats, topic_id, page),
+            "✅ — мониторится | ⭕ — выключен"
+            + ("\n🕘 — просмотр истории за интервал" if _is_admin(user_tg_id) else ""),
+            reply_markup=chats_kb(chats, topic_id, page, is_admin=_is_admin(user_tg_id)),
             parse_mode="HTML",
         )
     except Exception:
@@ -370,6 +408,80 @@ async def cb_chats_all_off(callback: CallbackQuery, repo: Repository):
     count = await repo.set_all_chats_active(user_tg_id, topic_id, False)
     await callback.answer(f"⭕ Выключено {count} чатов")
     await _refresh_chats(callback, repo, user_tg_id, topic_id, page=0)
+
+
+@router.callback_query(F.data.startswith("history_chat:"))
+async def cb_history_chat_start(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    user_tg_id = callback.from_user.id
+    if not _is_admin(user_tg_id):
+        await callback.answer("Только для администратора", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    chat_id, topic_id = int(parts[1]), int(parts[2])
+    page = int(parts[3]) if len(parts) > 3 else 0
+    chat = await repo.get_chat(user_tg_id, topic_id, chat_id)
+    if not chat:
+        await callback.answer("Чат не найден", show_alert=True)
+        return
+    await state.set_state(TopicForm.waiting_history_interval)
+    await state.update_data(history_chat_id=chat_id, history_topic_id=topic_id, history_page=page)
+    await callback.message.answer(
+        f"🕘 <b>Просмотр истории</b>\n\n"
+        f"Чат: <b>{html.escape(chat['title'])}</b>\n\n"
+        "Введите интервал:\n"
+        "• <code>24ч</code> — последние 24 часа\n"
+        "• <code>7д</code> — последние 7 дней\n"
+        "• <code>2026-05-01 - 2026-05-08</code>\n"
+        "• <code>2026-05-01 10:00 - 2026-05-01 18:00</code>\n\n"
+        f"Будет проверено до {MAX_HISTORY_MESSAGES} сообщений. Совпадения добавятся в ленту.",
+        reply_markup=cancel_kb(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(TopicForm.waiting_history_interval)
+async def process_history_interval(message: Message, state: FSMContext, repo: Repository, collector: ChatCollector):
+    user_tg_id = message.from_user.id
+    if not _is_admin(user_tg_id):
+        await state.clear()
+        await message.answer("Только для администратора.")
+        return
+    try:
+        start, end = parse_history_interval(message.text or "")
+    except ValueError as e:
+        await message.answer(f"❌ {e}")
+        return
+
+    data = await state.get_data()
+    chat_id = data["history_chat_id"]
+    topic_id = data["history_topic_id"]
+    page = data.get("history_page", 0)
+    await state.clear()
+
+    chat = await repo.get_chat(user_tg_id, topic_id, chat_id)
+    if not chat:
+        await message.answer("Чат не найден.")
+        return
+
+    status = await message.answer(
+        f"🕘 Проверяю историю «{html.escape(chat['title'])}»...\n"
+        f"Интервал: <code>{start:%Y-%m-%d %H:%M} — {end:%Y-%m-%d %H:%M}</code>",
+        parse_mode="HTML",
+    )
+    scanner = HistoryScanner(client=collector.client, repo=repo)
+    try:
+        result = await scanner.scan(user_tg_id, topic_id, chat, start, end)
+    except Exception as e:
+        await status.edit_text(f"❌ Ошибка просмотра истории: {html.escape(str(e))}", parse_mode="HTML")
+        return
+
+    await status.edit_text(
+        _history_result_text(chat, start, end, result),
+        reply_markup=chats_kb(await repo.get_chats(user_tg_id, topic_id), topic_id, page, is_admin=True),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 @router.callback_query(F.data.startswith("toggle_chat:"))

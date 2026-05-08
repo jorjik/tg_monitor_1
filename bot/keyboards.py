@@ -44,7 +44,7 @@ def topic_detail_kb(topic_id: int) -> InlineKeyboardMarkup:
 
 
 def chats_kb(
-    chats: list[dict], topic_id: int, page: int = 0, page_size: int = 8
+    chats: list[dict], topic_id: int, page: int = 0, page_size: int = 8, is_admin: bool = False
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     start = page * page_size
@@ -54,11 +54,19 @@ def chats_kb(
         ticon = "📢" if c["chat_type"] == "channel" else "👥"
         title = c["title"][:28]
         members = c.get("members_count", 0)
-        b.button(
+        toggle = InlineKeyboardButton(
             text=f"{icon} {ticon} {title} ({members:,})",
             callback_data=f"toggle_chat:{c['id']}:{topic_id}:{page}",
         )
-    b.adjust(1)
+        if is_admin:
+            b.row(
+                toggle,
+                InlineKeyboardButton(
+                    text="🕘", callback_data=f"history_chat:{c['id']}:{topic_id}:{page}"
+                ),
+            )
+        else:
+            b.row(toggle)
     nav = []
     if page > 0:
         nav.append(
