@@ -1,17 +1,35 @@
+import asyncio
 import html
+import logging
+from io import BytesIO
 
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.access import require_callback_access, require_message_access
-from bot.keyboards import cancel_kb, chats_kb, skip_topic_terms_kb, topic_detail_kb, topics_kb
+from bot.access import (
+    require_callback_access,
+    require_message_access,
+    require_paid_callback_access,
+    require_paid_message_access,
+)
+from bot.keyboards import (
+    cancel_kb,
+    chats_kb,
+    manual_chat_kb,
+    skip_topic_terms_kb,
+    topic_detail_kb,
+    topics_kb,
+)
 from bot.states import TopicForm
 from db.repository import Repository
 from userbot.collector import GEO_EXCLUDE_DEFAULT, ChatCollector
 
+logger = logging.getLogger(__name__)
 router = Router()
+MAX_CHAT_LIST_FILE_BYTES = 128 * 1024
+MAX_CHAT_LIST_ITEMS = 100
 CONTROL_TEXTS = {
     "📋 Темы",
     "➕ Новая тема",
@@ -52,6 +70,32 @@ def _terms_preview(terms: list[str], limit: int = 5) -> str:
     if len(terms) > limit:
         preview += f" и ещё {len(terms) - limit}"
     return preview
+
+
+def _parse_chat_list_file(value: str) -> list[str]:
+    chats: list[str] = []
+    seen: set[str] = set()
+    for line in value.splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        if item not in seen:
+            seen.add(item)
+            chats.append(item)
+        if len(chats) > MAX_CHAT_LIST_ITEMS:
+            raise ValueError(f"В файле больше {MAX_CHAT_LIST_ITEMS} чатов.")
+    if not chats:
+        raise ValueError("Файл не содержит чатов.")
+    return chats
+
+
+def _decode_chat_list_file(data: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "cp1251"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    raise ValueError("Не удалось прочитать файл. Сохраните список в UTF-8 или Windows-1251.")
 
 
 @router.message(F.text == "📋 Темы")
@@ -305,11 +349,55 @@ async def cb_add_chat_manual_start(callback: CallbackQuery, state: FSMContext, r
         return
     user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
+    if not await repo.get_topic(user_tg_id, topic_id):
+        await callback.answer("Тема не найдена", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "➕ <b>Добавить чаты вручную</b>\n\n"
+        "Выберите способ добавления:",
+        reply_markup=manual_chat_kb(topic_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("add_chat_text:"))
+async def cb_add_chat_text_start(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
+    user_tg_id = callback.from_user.id
+    topic_id = int(callback.data.split(":")[1])
+    if not await repo.get_topic(user_tg_id, topic_id):
+        await callback.answer("Тема не найдена", show_alert=True)
+        return
     await state.set_state(TopicForm.waiting_manual_chat)
     await state.update_data(manual_topic_id=topic_id, manual_user_tg_id=user_tg_id)
     await callback.message.answer(
         "✏️ <b>Ручное добавление чата</b>\n\n"
         "Отправьте @username, ссылку или название:\n"
+        "• <code>@startup_global</code>\n"
+        "• <code>https://t.me/startup_global</code>",
+        reply_markup=cancel_kb(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("add_chat_file:"))
+async def cb_add_chat_file_start(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    if not await require_paid_callback_access(callback, repo):
+        return
+    user_tg_id = callback.from_user.id
+    topic_id = int(callback.data.split(":")[1])
+    if not await repo.get_topic(user_tg_id, topic_id):
+        await callback.answer("Тема не найдена", show_alert=True)
+        return
+    await state.set_state(TopicForm.waiting_manual_chat_file)
+    await state.update_data(manual_topic_id=topic_id, manual_user_tg_id=user_tg_id)
+    await callback.message.answer(
+        "📄 <b>Загрузка списка чатов</b>\n\n"
+        "Прикрепите текстовый файл до 128 КБ.\n"
+        "Каждый чат — с новой строки:\n"
         "• <code>@startup_global</code>\n"
         "• <code>https://t.me/startup_global</code>",
         reply_markup=cancel_kb(),
@@ -334,7 +422,76 @@ async def process_manual_chat(message: Message, state: FSMContext, repo, collect
     ok, text = await collector.add_by_username(topic_id, message.text or "")
     icon = "✅" if ok else "❌"
     await message.answer(
-        f"{icon} {text}",
+        f"{icon} {html.escape(text)}",
+        reply_markup=topic_detail_kb(topic_id),
+        parse_mode="HTML",
+    )
+
+
+@router.message(TopicForm.waiting_manual_chat_file)
+async def process_manual_chat_file(message: Message, state: FSMContext, repo, collector):
+    if not await require_paid_message_access(message, repo):
+        await state.clear()
+        return
+    data = await state.get_data()
+    topic_id = data["manual_topic_id"]
+    user_tg_id = data["manual_user_tg_id"]
+    if not await repo.get_topic(user_tg_id, topic_id):
+        await state.clear()
+        await message.answer("Тема не найдена.")
+        return
+    document = message.document
+    if not document:
+        await message.answer("❌ Прикрепите текстовый файл со списком чатов.", reply_markup=cancel_kb())
+        return
+    if document.file_size and document.file_size > MAX_CHAT_LIST_FILE_BYTES:
+        await message.answer("❌ Файл слишком большой. Максимум: 128 КБ.", reply_markup=cancel_kb())
+        return
+    buffer = BytesIO()
+    try:
+        await message.bot.download(document.file_id, destination=buffer)
+    except Exception:
+        logger.exception("Failed to download chat list file")
+        await message.answer(
+            "❌ Не удалось скачать файл. Попробуйте позже.",
+            reply_markup=cancel_kb(),
+        )
+        return
+    raw_data = buffer.getvalue()
+    if len(raw_data) > MAX_CHAT_LIST_FILE_BYTES:
+        await message.answer("❌ Файл слишком большой. Максимум: 128 КБ.", reply_markup=cancel_kb())
+        return
+    try:
+        chats_to_add = _parse_chat_list_file(_decode_chat_list_file(raw_data))
+    except ValueError as e:
+        await message.answer(f"❌ {html.escape(str(e))}", reply_markup=cancel_kb(), parse_mode="HTML")
+        return
+
+    await state.clear()
+    added = 0
+    failed: list[str] = []
+    for index, raw in enumerate(chats_to_add):
+        ok, text = await collector.add_by_username(topic_id, raw)
+        if ok:
+            added += 1
+        else:
+            failed.append(f"{raw} — {text}")
+        if index + 1 < len(chats_to_add):
+            await asyncio.sleep(0.4)
+
+    result = (
+        f"📄 <b>Импорт завершён</b>\n\n"
+        f"Всего в файле: <b>{len(chats_to_add)}</b>\n"
+        f"✅ Добавлено: <b>{added}</b>\n"
+        f"❌ Не добавлено: <b>{len(failed)}</b>"
+    )
+    if failed:
+        preview = "\n".join(f"• {html.escape(item)}" for item in failed[:10])
+        result += f"\n\n<b>Ошибки:</b>\n{preview}"
+        if len(failed) > 10:
+            result += f"\n…и ещё {len(failed) - 10}"
+    await message.answer(
+        result,
         reply_markup=topic_detail_kb(topic_id),
         parse_mode="HTML",
     )
@@ -352,7 +509,7 @@ async def _refresh_chats(
     active = sum(1 for c in chats if c["is_active"])
     try:
         await callback.message.edit_text(
-            f"💬 <b>Чаты «{topic['name']}»</b>\n"
+            f"💬 <b>Чаты «{html.escape(topic['name'])}»</b>\n"
             f"Всего: {len(chats)} | Активных: {active}\n\n"
             "✅ — мониторится | ⭕ — выключен",
             reply_markup=chats_kb(chats, topic_id, page),
@@ -376,7 +533,7 @@ async def cb_view_chats(callback: CallbackQuery, repo: Repository):
     chats = await repo.get_chats(user_tg_id, topic_id)
     if not chats:
         await callback.message.edit_text(
-            f"💬 Нет чатов для «{topic['name']}».\nЗапустите 🔍 Собрать чаты.",
+            f"💬 Нет чатов для «{html.escape(topic['name'])}».\nЗапустите 🔍 Собрать чаты.",
             reply_markup=topic_detail_kb(topic_id),
             parse_mode="HTML",
         )

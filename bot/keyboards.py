@@ -56,6 +56,15 @@ def topic_detail_kb(topic_id: int) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def manual_chat_kb(topic_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✏️ Ввести один чат", callback_data=f"add_chat_text:{topic_id}")
+    b.button(text="📄 Загрузить файл со списком", callback_data=f"add_chat_file:{topic_id}")
+    b.button(text="◀️ К теме", callback_data=f"topic:{topic_id}")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def chats_kb(
     chats: list[dict], topic_id: int, page: int = 0, page_size: int = 8
 ) -> InlineKeyboardMarkup:

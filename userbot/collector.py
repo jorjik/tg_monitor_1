@@ -12,6 +12,7 @@ from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import Channel, Chat
 
 logger = logging.getLogger(__name__)
+MAX_FLOOD_WAIT_SECONDS = 60
 
 # Слова-маркеры РФ-географии для кнопки «Убрать Гео РФ»
 GEO_EXCLUDE_DEFAULT = ",".join(
@@ -173,6 +174,20 @@ class ChatCollector:
 
         try:
             entity = await self.client.get_entity(username)
+        except FloodWaitError as e:
+            if e.seconds > MAX_FLOOD_WAIT_SECONDS:
+                logger.warning(
+                    f"FloodWait {e.seconds}s превышает лимит при ручном добавлении «{username}»"
+                )
+                return False, "Telegram временно ограничил запросы. Попробуйте позже."
+            logger.warning(f"FloodWait {e.seconds}s при ручном добавлении «{username}»")
+            await asyncio.sleep(e.seconds + 2)
+            try:
+                entity = await self.client.get_entity(username)
+            except (UsernameNotOccupiedError, UsernameInvalidError):
+                return False, f"Чат @{username} не найден."
+            except Exception as retry_error:
+                return False, f"Ошибка после ожидания: {retry_error}"
         except (UsernameNotOccupiedError, UsernameInvalidError):
             return False, f"Чат @{username} не найден."
         except Exception as e:

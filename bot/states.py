@@ -5,6 +5,7 @@ class TopicForm(StatesGroup):
     waiting_name = State()
     waiting_search_terms = State()
     waiting_manual_chat = State()  # ввод @username для ручного добавления
+    waiting_manual_chat_file = State()
 
 
 class KeywordForm(StatesGroup):

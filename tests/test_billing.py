@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from bot.access import user_has_paid_access
 from bot.keyboards import admin_tariffs_kb, main_menu_kb, subscription_kb
 from db import repository as repository_module
 from db.repository import Repository
@@ -100,6 +101,35 @@ class BillingRepositoryTest(unittest.IsolatedAsyncioTestCase):
                 await repo.create_tariff("Bad", 0, 30)
             with self.assertRaises(ValueError):
                 await repo.update_tariff(tariff["id"], duration_days=0)
+
+    async def test_trial_access_is_not_paid_access(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Repository(str(Path(td) / "db.sqlite"))
+            await repo.init_db()
+            user_id = 123
+
+            await repo.ensure_trial(user_id)
+
+            self.assertFalse(await user_has_paid_access(repo, user_id))
+
+    async def test_payment_grants_paid_access(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Repository(str(Path(td) / "db.sqlite"))
+            await repo.init_db()
+            user_id = 123
+            tariff = (await repo.get_tariffs(active_only=True))[0]
+
+            await repo.record_payment(
+                user_tg_id=user_id,
+                tariff_id=tariff["id"],
+                payload=f"subscription:{user_id}:{tariff['id']}:{tariff['stars']}:{tariff['duration_days']}",
+                currency="XTR",
+                stars=tariff["stars"],
+                duration_days=tariff["duration_days"],
+                telegram_payment_charge_id="charge-paid-access",
+            )
+
+            self.assertTrue(await user_has_paid_access(repo, user_id))
 
     async def test_monitor_keywords_only_include_users_with_access_or_admin(self):
         previous_admin = repository_module.ADMIN_USER_ID
