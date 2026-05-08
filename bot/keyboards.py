@@ -7,15 +7,25 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+def main_menu_kb(is_admin: bool = False, has_access: bool = True) -> ReplyKeyboardMarkup:
+    if not is_admin and not has_access:
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="💳 Подписка")],
+                [KeyboardButton(text="❓ Помощь")],
+            ],
+            resize_keyboard=True,
+        )
     keyboard = [
         [KeyboardButton(text="📋 Темы"), KeyboardButton(text="➕ Новая тема")],
         [KeyboardButton(text="🔑 Ключевые слова"), KeyboardButton(text="📰 Лента")],
         [KeyboardButton(text="⚙️ Мониторинг"), KeyboardButton(text="🚫 Гео-фильтр")],
-        [KeyboardButton(text="❓ Помощь")],
     ]
     if is_admin:
-        keyboard.insert(3, [KeyboardButton(text="🕘 История")])
+        keyboard.append([KeyboardButton(text="🕘 История"), KeyboardButton(text="💎 Тарифы")])
+        keyboard.append([KeyboardButton(text="❓ Помощь")])
+    else:
+        keyboard.append([KeyboardButton(text="💳 Подписка"), KeyboardButton(text="❓ Помощь")])
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,
@@ -175,6 +185,43 @@ def history_interval_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="24ч — последние 24 часа", callback_data="history_interval:24ч")
     b.button(text="7д — последние 7 дней", callback_data="history_interval:7д")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for tariff in tariffs:
+        b.button(
+            text=f"⭐ {tariff['name']} — {tariff['stars']} Stars / {tariff['duration_days']} дн.",
+            callback_data=f"billing_pay:{tariff['id']}",
+        )
+    b.adjust(1)
+    return b.as_markup()
+
+
+def admin_tariffs_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for tariff in tariffs:
+        icon = "✅" if tariff["is_active"] else "⭕"
+        b.button(
+            text=f"{icon} {tariff['name']} — {tariff['stars']}⭐ / {tariff['duration_days']} дн.",
+            callback_data=f"admin_tariff:{tariff['id']}",
+        )
+    b.button(text="➕ Новый тариф", callback_data="admin_tariff:new")
+    b.button(text="🎁 Демо-доступ", callback_data="admin_trial_days")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def admin_tariff_detail_kb(tariff: dict) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="✏️ Название", callback_data=f"admin_tariff_edit:{tariff['id']}:name")
+    b.button(text="⭐ Цена", callback_data=f"admin_tariff_edit:{tariff['id']}:stars")
+    b.button(text="📅 Дней", callback_data=f"admin_tariff_edit:{tariff['id']}:days")
+    toggle = "⭕ Выключить" if tariff["is_active"] else "✅ Включить"
+    b.button(text=toggle, callback_data=f"admin_tariff_toggle:{tariff['id']}")
+    b.button(text="◀️ К тарифам", callback_data="admin_tariffs")
     b.adjust(1)
     return b.as_markup()
 

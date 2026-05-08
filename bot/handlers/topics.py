@@ -5,6 +5,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.access import require_callback_access, require_message_access
 from bot.keyboards import cancel_kb, chats_kb, skip_topic_terms_kb, topic_detail_kb, topics_kb
 from bot.states import TopicForm
 from db.repository import Repository
@@ -19,6 +20,8 @@ CONTROL_TEXTS = {
     "⚙️ Мониторинг",
     "🚫 Гео-фильтр",
     "🕘 История",
+    "💳 Подписка",
+    "💎 Тарифы",
     "❓ Помощь",
 }
 
@@ -54,6 +57,8 @@ def _terms_preview(terms: list[str], limit: int = 5) -> str:
 @router.message(F.text == "📋 Темы")
 @router.message(Command("topics"))
 async def cmd_topics(message: Message, repo: Repository):
+    if not await require_message_access(message, repo):
+        return
     user_tg_id = message.from_user.id
     topics = await repo.get_topics(user_tg_id)
     if not topics:
@@ -72,6 +77,8 @@ async def cmd_topics(message: Message, repo: Repository):
 
 @router.callback_query(F.data == "topics_list")
 async def cb_topics_list(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topics = await repo.get_topics(user_tg_id)
     await callback.message.edit_text(
@@ -84,6 +91,8 @@ async def cb_topics_list(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data.startswith("topic:"))
 async def cb_topic_detail(callback: CallbackQuery, repo: Repository, state: FSMContext):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topic_id_str = callback.data.split(":")[1]
     if topic_id_str == "new":
@@ -120,7 +129,9 @@ async def cb_topic_detail(callback: CallbackQuery, repo: Repository, state: FSMC
 
 @router.message(F.text == "➕ Новая тема")
 @router.message(Command("new_topic"))
-async def cmd_new_topic(message: Message, state: FSMContext):
+async def cmd_new_topic(message: Message, state: FSMContext, repo: Repository):
+    if not await require_message_access(message, repo):
+        return
     await state.set_state(TopicForm.waiting_name)
     await message.answer(
         "📝 <b>Новая тема</b>\n\nВведите <b>название</b> (напр. Бизнес, Крипта):",
@@ -131,6 +142,9 @@ async def cmd_new_topic(message: Message, state: FSMContext):
 
 @router.message(TopicForm.waiting_name)
 async def process_topic_name(message: Message, state: FSMContext, repo: Repository):
+    if not await require_message_access(message, repo):
+        await state.clear()
+        return
     user_tg_id = message.from_user.id
     name = (message.text or "").strip()
     if _is_control_text(name):
@@ -156,6 +170,9 @@ async def process_topic_name(message: Message, state: FSMContext, repo: Reposito
 
 @router.message(TopicForm.waiting_search_terms)
 async def process_search_terms(message: Message, state: FSMContext, repo: Repository):
+    if not await require_message_access(message, repo):
+        await state.clear()
+        return
     user_tg_id = message.from_user.id
     terms_list = _split_search_terms(message.text or "")
     if not terms_list:
@@ -182,6 +199,9 @@ async def process_search_terms(message: Message, state: FSMContext, repo: Reposi
 
 @router.callback_query(TopicForm.waiting_search_terms, F.data == "topic_terms:skip")
 async def cb_skip_search_terms(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        await state.clear()
+        return
     user_tg_id = callback.from_user.id
     data = await state.get_data()
     topic_id = await repo.create_topic(user_tg_id, data["topic_name"], "")
@@ -198,6 +218,8 @@ async def cb_skip_search_terms(callback: CallbackQuery, state: FSMContext, repo:
 
 @router.callback_query(F.data.startswith("del_topic:"))
 async def cb_delete_topic(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
     topic = await repo.get_topic(user_tg_id, topic_id)
@@ -218,6 +240,8 @@ async def cb_delete_topic(callback: CallbackQuery, repo: Repository):
 async def cb_collect(
     callback: CallbackQuery, repo: Repository, collector: ChatCollector
 ):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
     topic = await repo.get_topic(user_tg_id, topic_id)
@@ -276,7 +300,9 @@ async def cb_collect(
 
 
 @router.callback_query(F.data.startswith("add_chat_manual:"))
-async def cb_add_chat_manual_start(callback: CallbackQuery, state: FSMContext):
+async def cb_add_chat_manual_start(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
     await state.set_state(TopicForm.waiting_manual_chat)
@@ -294,6 +320,9 @@ async def cb_add_chat_manual_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(TopicForm.waiting_manual_chat)
 async def process_manual_chat(message: Message, state: FSMContext, repo, collector):
+    if not await require_message_access(message, repo):
+        await state.clear()
+        return
     data = await state.get_data()
     topic_id = data["manual_topic_id"]
     user_tg_id = data["manual_user_tg_id"]
@@ -335,6 +364,8 @@ async def _refresh_chats(
 
 @router.callback_query(F.data.startswith("chats:"))
 async def cb_view_chats(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     parts = callback.data.split(":")
     topic_id, page = int(parts[1]), int(parts[2]) if len(parts) > 2 else 0
@@ -357,6 +388,8 @@ async def cb_view_chats(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data.startswith("chats_all_on:"))
 async def cb_chats_all_on(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
     count = await repo.set_all_chats_active(user_tg_id, topic_id, True)
@@ -366,6 +399,8 @@ async def cb_chats_all_on(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data.startswith("chats_all_off:"))
 async def cb_chats_all_off(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
     count = await repo.set_all_chats_active(user_tg_id, topic_id, False)
@@ -375,6 +410,8 @@ async def cb_chats_all_off(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data.startswith("toggle_chat:"))
 async def cb_toggle_chat(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     parts = callback.data.split(":")
     chat_id, topic_id = int(parts[1]), int(parts[2])

@@ -18,3 +18,10 @@ class GeoFilterForm(StatesGroup):
 
 class HistoryForm(StatesGroup):
     waiting_interval = State()
+
+
+class BillingAdminForm(StatesGroup):
+    waiting_name = State()
+    waiting_stars = State()
+    waiting_days = State()
+    waiting_trial_days = State()

@@ -3,12 +3,24 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.access import require_callback_access, require_message_access
 from bot.keyboards import cancel_kb, geo_filter_kb
 from bot.states import GeoFilterForm
 from db.repository import Repository
 from userbot.collector import GEO_EXCLUDE_DEFAULT
 
 router = Router()
+MAX_GEO_WORD_BYTES = 55
+
+
+def _geo_word_error(word: str) -> str | None:
+    if not word:
+        return "❌ Пустое слово."
+    if "," in word:
+        return "❌ Слово не должно содержать запятую."
+    if len(word.encode("utf-8")) > MAX_GEO_WORD_BYTES:
+        return "❌ Слово слишком длинное."
+    return None
 
 
 async def _get_words(repo: Repository, user_tg_id: int) -> list[str]:
@@ -45,11 +57,15 @@ async def _show_filter(msg, repo: Repository, user_tg_id: int, edit: bool = Fals
 @router.message(F.text == "🚫 Гео-фильтр")
 @router.message(Command("geo_filter"))
 async def cmd_geo_filter(message: Message, repo: Repository):
+    if not await require_message_access(message, repo):
+        return
     await _show_filter(message, repo, message.from_user.id, edit=False)
 
 
 @router.callback_query(F.data == "geo_add")
-async def cb_geo_add(callback: CallbackQuery, state: FSMContext):
+async def cb_geo_add(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     await state.set_state(GeoFilterForm.waiting_add_word)
     await callback.message.answer(
         "➕ Введите слово или фразу для добавления в фильтр.\n\n"
@@ -62,10 +78,14 @@ async def cb_geo_add(callback: CallbackQuery, state: FSMContext):
 
 @router.message(GeoFilterForm.waiting_add_word)
 async def process_geo_add(message: Message, state: FSMContext, repo: Repository):
+    if not await require_message_access(message, repo):
+        await state.clear()
+        return
     word = (message.text or "").strip().lower()
     await state.clear()
-    if not word:
-        await message.answer("❌ Пустое слово.")
+    error = _geo_word_error(word)
+    if error:
+        await message.answer(error)
         return
 
     user_tg_id = message.from_user.id
@@ -82,6 +102,8 @@ async def process_geo_add(message: Message, state: FSMContext, repo: Repository)
 
 @router.callback_query(F.data.startswith("geo_del:"))
 async def cb_geo_del(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     word = callback.data.split(":", 1)[1]
     user_tg_id = callback.from_user.id
     words = await _get_words(repo, user_tg_id)
@@ -96,6 +118,8 @@ async def cb_geo_del(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data == "geo_rf")
 async def cb_geo_rf(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     await repo.set_setting("geo_exclude", GEO_EXCLUDE_DEFAULT, user_tg_id=user_tg_id)
     await callback.answer("🚫 Гео РФ будет исключаться")
@@ -104,6 +128,8 @@ async def cb_geo_rf(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data == "geo_reset")
 async def cb_geo_reset(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     await repo.set_setting("geo_exclude", "", user_tg_id=user_tg_id)
     await callback.answer("🧹 Гео-фильтр очищен")

@@ -12,7 +12,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from bot.handlers import common, feed, geo_filter, history, keywords, monitor, topics
+from bot.handlers import billing, common, feed, geo_filter, history, keywords, monitor, topics
 from core.config import (
     API_HASH,
     API_ID,
@@ -92,6 +92,7 @@ async def main() -> None:
     dp["watcher"] = watcher
 
     dp.include_router(common.router)
+    dp.include_router(billing.router)
     dp.include_router(topics.router)
     dp.include_router(keywords.router)
     dp.include_router(history.router)

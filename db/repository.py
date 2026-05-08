@@ -1,10 +1,30 @@
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import aiosqlite
 
+from core.config import ADMIN_USER_ID
+
 logger = logging.getLogger(__name__)
+BILLING_TRIAL_DAYS_KEY = "billing_trial_days"
+DEFAULT_TRIAL_DAYS = 7
+GEO_FILTER_DEFAULT_MIGRATED_KEY = "geo_filter_empty_default_migrated"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
+def _format_ts(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS topics (
@@ -67,6 +87,36 @@ CREATE TABLE IF NOT EXISTS bot_users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS tariffs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    stars INTEGER NOT NULL CHECK(stars >= 1),
+    duration_days INTEGER NOT NULL CHECK(duration_days >= 1),
+    is_active INTEGER DEFAULT 1 CHECK(is_active IN (0, 1)),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS user_subscriptions (
+    user_tg_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL,
+    tariff_id INTEGER REFERENCES tariffs(id),
+    trial_started_at TIMESTAMP,
+    started_at TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_tg_id INTEGER NOT NULL,
+    tariff_id INTEGER NOT NULL REFERENCES tariffs(id),
+    payload TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    stars INTEGER NOT NULL CHECK(stars >= 1),
+    duration_days INTEGER NOT NULL CHECK(duration_days >= 1),
+    telegram_payment_charge_id TEXT NOT NULL UNIQUE,
+    provider_payment_charge_id TEXT,
+    paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
@@ -85,6 +135,8 @@ class Repository:
             await self._migrate_keywords(db)
             await self._migrate_feed(db)
             await self._migrate_settings(db)
+            await self._migrate_geo_filter_default(db)
+            await self._seed_billing_defaults(db)
             await db.execute(
                 "DELETE FROM keywords WHERE id NOT IN ("
                 "SELECT MIN(id) FROM keywords GROUP BY user_tg_id, word, COALESCE(topic_id, -1)"
@@ -96,6 +148,27 @@ class Repository:
             )
             await db.execute("PRAGMA foreign_keys = ON")
             await db.commit()
+
+    async def _seed_billing_defaults(self, db) -> None:
+        await self._migrate_billing(db)
+        await db.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            (BILLING_TRIAL_DAYS_KEY, str(DEFAULT_TRIAL_DAYS)),
+        )
+        cur = await db.execute("SELECT COUNT(*) FROM tariffs")
+        row = await cur.fetchone()
+        if row and row[0] == 0:
+            await db.execute(
+                "INSERT INTO tariffs (name, stars, duration_days, is_active) VALUES (?, ?, ?, 1)",
+                ("Месячный доступ", 100, 30),
+            )
+
+    async def _migrate_billing(self, db) -> None:
+        payment_columns = await self._columns(db, "payments")
+        if "duration_days" not in payment_columns:
+            await db.execute(
+                "ALTER TABLE payments ADD COLUMN duration_days INTEGER NOT NULL DEFAULT 30"
+            )
 
     async def _columns(self, db, table: str) -> set[str]:
         cur = await db.execute(f"PRAGMA table_info({table})")
@@ -213,6 +286,25 @@ class Repository:
             "INSERT OR IGNORE INTO user_settings (user_tg_id, key, value) "
             "SELECT ?, key, value FROM settings",
             (legacy_owner,),
+        )
+
+    async def _migrate_geo_filter_default(self, db) -> None:
+        cur = await db.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (GEO_FILTER_DEFAULT_MIGRATED_KEY,),
+        )
+        if await cur.fetchone():
+            return
+        from userbot.collector import GEO_EXCLUDE_DEFAULT
+
+        await db.execute(
+            "INSERT OR IGNORE INTO user_settings (user_tg_id, key, value) "
+            "SELECT tg_id, ?, ? FROM bot_users",
+            ("geo_exclude", GEO_EXCLUDE_DEFAULT),
+        )
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (GEO_FILTER_DEFAULT_MIGRATED_KEY, "1"),
         )
 
     async def upsert_bot_user(
@@ -503,10 +595,12 @@ class Repository:
                 "SELECT t.user_tg_id, k.word FROM chats c "
                 "JOIN topics t ON t.id = c.topic_id "
                 "JOIN bot_users bu ON bu.tg_id = t.user_tg_id AND bu.is_active = 1 "
+                "LEFT JOIN user_subscriptions us ON us.user_tg_id = t.user_tg_id "
                 "JOIN keywords k ON k.user_tg_id = t.user_tg_id "
                 "AND k.is_active = 1 AND (k.topic_id IS NULL OR k.topic_id = t.id) "
-                "WHERE c.tg_id = ? AND c.is_active = 1",
-                (chat_tg_id,),
+                "WHERE c.tg_id = ? AND c.is_active = 1 "
+                "AND (t.user_tg_id = ? OR us.expires_at > CURRENT_TIMESTAMP)",
+                (chat_tg_id, ADMIN_USER_ID),
             )
             result: dict[int, set[str]] = {}
             for user_tg_id, word in await cur.fetchall():
@@ -625,6 +719,218 @@ class Repository:
             cur = await db.execute("SELECT COUNT(*) FROM feed WHERE user_tg_id = ?", (user_tg_id,))
             row = await cur.fetchone()
             return row[0] if row else 0
+
+    async def get_trial_days(self) -> int:
+        raw = await self.get_setting(BILLING_TRIAL_DAYS_KEY, str(DEFAULT_TRIAL_DAYS))
+        try:
+            days = int(raw)
+        except ValueError:
+            return DEFAULT_TRIAL_DAYS
+        return max(0, days)
+
+    async def set_trial_days(self, days: int) -> None:
+        await self.set_setting(BILLING_TRIAL_DAYS_KEY, str(max(0, days)))
+
+    async def ensure_trial(self, user_tg_id: int) -> dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM user_subscriptions WHERE user_tg_id = ?",
+                (user_tg_id,),
+            )
+            row = await cur.fetchone()
+            if row:
+                return self._subscription_access(dict(row))
+            now = _utc_now()
+            expires_at = now + timedelta(days=await self.get_trial_days())
+            await db.execute(
+                "INSERT OR IGNORE INTO user_subscriptions "
+                "(user_tg_id, status, trial_started_at, expires_at) VALUES (?, ?, ?, ?)",
+                (user_tg_id, "trial", _format_ts(now), _format_ts(expires_at)),
+            )
+            await db.commit()
+            cur = await db.execute(
+                "SELECT * FROM user_subscriptions WHERE user_tg_id = ?",
+                (user_tg_id,),
+            )
+            row = await cur.fetchone()
+            if not row:
+                return {"status": "none", "expires_at": None, "is_active": False}
+            return self._subscription_access(dict(row))
+
+    async def get_subscription_access(self, user_tg_id: int) -> dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM user_subscriptions WHERE user_tg_id = ?",
+                (user_tg_id,),
+            )
+            row = await cur.fetchone()
+            if not row:
+                return {"status": "none", "expires_at": None, "is_active": False}
+            return self._subscription_access(dict(row))
+
+    def _subscription_access(self, subscription: dict) -> dict:
+        expires_at = _parse_ts(subscription.get("expires_at"))
+        is_active = bool(expires_at and expires_at > _utc_now())
+        result = dict(subscription)
+        result["is_active"] = is_active
+        return result
+
+    async def get_tariffs(self, active_only: bool = False) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if active_only:
+                cur = await db.execute(
+                    "SELECT * FROM tariffs WHERE is_active = 1 ORDER BY stars, duration_days, id"
+                )
+            else:
+                cur = await db.execute("SELECT * FROM tariffs ORDER BY is_active DESC, stars, id")
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def get_tariff(self, tariff_id: int, active_only: bool = False) -> Optional[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if active_only:
+                cur = await db.execute(
+                    "SELECT * FROM tariffs WHERE id = ? AND is_active = 1",
+                    (tariff_id,),
+                )
+            else:
+                cur = await db.execute("SELECT * FROM tariffs WHERE id = ?", (tariff_id,))
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def create_tariff(self, name: str, stars: int, duration_days: int) -> int:
+        name = name.strip()
+        if len(name) < 2:
+            raise ValueError("Tariff name is too short")
+        if stars <= 0:
+            raise ValueError("Tariff price must be positive")
+        if duration_days <= 0:
+            raise ValueError("Tariff duration must be positive")
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "INSERT INTO tariffs (name, stars, duration_days, is_active) VALUES (?, ?, ?, 1)",
+                (name, stars, duration_days),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+    async def update_tariff(self, tariff_id: int, **fields) -> bool:
+        allowed = {"name", "stars", "duration_days"}
+        updates = {key: value for key, value in fields.items() if key in allowed}
+        if not updates:
+            return False
+        if "name" in updates:
+            updates["name"] = str(updates["name"]).strip()
+            if len(updates["name"]) < 2:
+                raise ValueError("Tariff name is too short")
+        if "stars" in updates and int(updates["stars"]) <= 0:
+            raise ValueError("Tariff price must be positive")
+        if "duration_days" in updates and int(updates["duration_days"]) <= 0:
+            raise ValueError("Tariff duration must be positive")
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        values = list(updates.values()) + [tariff_id]
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                f"UPDATE tariffs SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                values,
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def set_tariff_active(self, tariff_id: int, is_active: bool) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "UPDATE tariffs SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (1 if is_active else 0, tariff_id),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def record_payment(
+        self,
+        user_tg_id: int,
+        tariff_id: int,
+        payload: str,
+        currency: str,
+        stars: int,
+        duration_days: int,
+        telegram_payment_charge_id: str,
+        provider_payment_charge_id: str = "",
+    ) -> tuple[Optional[str], bool]:
+        if currency != "XTR" or stars <= 0 or duration_days <= 0:
+            return None, False
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM tariffs WHERE id = ?", (tariff_id,))
+            tariff = await cur.fetchone()
+            if not tariff:
+                return None, False
+            inserted = True
+            try:
+                await db.execute(
+                    "INSERT INTO payments "
+                    "(user_tg_id, tariff_id, payload, currency, stars, duration_days, "
+                    "telegram_payment_charge_id, provider_payment_charge_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        user_tg_id,
+                        tariff_id,
+                        payload,
+                        currency,
+                        stars,
+                        duration_days,
+                        telegram_payment_charge_id,
+                        provider_payment_charge_id,
+                    ),
+                )
+            except aiosqlite.IntegrityError:
+                cur = await db.execute(
+                    "SELECT 1 FROM payments WHERE telegram_payment_charge_id = ?",
+                    (telegram_payment_charge_id,),
+                )
+                if not await cur.fetchone():
+                    raise
+                inserted = False
+
+            cur = await db.execute(
+                "SELECT * FROM user_subscriptions WHERE user_tg_id = ?",
+                (user_tg_id,),
+            )
+            subscription = await cur.fetchone()
+            if inserted:
+                await db.execute(
+                    "INSERT INTO user_subscriptions "
+                    "(user_tg_id, status, tariff_id, started_at, expires_at, updated_at) "
+                    "VALUES (?, ?, ?, CURRENT_TIMESTAMP, datetime(CURRENT_TIMESTAMP, '+' || ? || ' days'), CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(user_tg_id) DO UPDATE SET "
+                    "status = excluded.status, "
+                    "tariff_id = excluded.tariff_id, "
+                    "started_at = CASE "
+                    "WHEN user_subscriptions.status = 'paid' "
+                    "AND user_subscriptions.started_at IS NOT NULL "
+                    "THEN user_subscriptions.started_at ELSE excluded.started_at END, "
+                    "expires_at = datetime("
+                    "CASE WHEN user_subscriptions.expires_at > CURRENT_TIMESTAMP "
+                    "THEN user_subscriptions.expires_at ELSE CURRENT_TIMESTAMP END, "
+                    "'+' || ? || ' days'), "
+                    "updated_at = CURRENT_TIMESTAMP",
+                    (user_tg_id, "paid", tariff_id, duration_days, duration_days),
+                )
+                cur = await db.execute(
+                    "SELECT expires_at FROM user_subscriptions WHERE user_tg_id = ?",
+                    (user_tg_id,),
+                )
+                row = await cur.fetchone()
+                await db.commit()
+                return row["expires_at"], True
+
+            await db.commit()
+            if subscription:
+                return subscription["expires_at"], False
+            return None, False
 
     async def get_setting(
         self, key: str, default: str = "", user_tg_id: Optional[int] = None

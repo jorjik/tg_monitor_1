@@ -3,8 +3,8 @@ from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
+from bot.access import is_admin
 from bot.keyboards import main_menu_kb
-from core.config import ADMIN_USER_ID
 from db.repository import Repository
 
 router = Router()
@@ -22,30 +22,39 @@ HELP_TEXT = """
 /start — главное меню
 /feed — лента
 /monitor — мониторинг
+/subscription — подписка и оплата
 /subscribe — включить уведомления
 /unsubscribe — выключить уведомления
 """
 
 
-def _is_admin(user_tg_id: int) -> bool:
-    return bool(ADMIN_USER_ID and user_tg_id == ADMIN_USER_ID)
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, repo: Repository):
     await state.clear()
-    if message.from_user:
-        await repo.upsert_bot_user(
-            tg_id=message.from_user.id,
-            username=message.from_user.username,
-            first_name=message.from_user.first_name,
-            last_name=message.from_user.last_name,
-        )
+    if not message.from_user:
+        return
+    user_tg_id = message.from_user.id
+    await repo.upsert_bot_user(
+        tg_id=user_tg_id,
+        username=message.from_user.username,
+        first_name=message.from_user.first_name,
+        last_name=message.from_user.last_name,
+    )
+    admin = is_admin(user_tg_id)
+    access = {"is_active": True, "status": "admin", "expires_at": None}
+    if not admin:
+        access = await repo.ensure_trial(user_tg_id)
+    if admin:
+        access_text = "Админ-доступ активен."
+    elif access["is_active"]:
+        access_text = f"Доступ активен до <code>{access['expires_at']}</code>."
+    else:
+        access_text = "Демо-доступ закончился. Откройте <b>💳 Подписка</b> для оплаты."
     await message.answer(
         "👋 <b>Добро пожаловать в Telegram Monitor!</b>\n\n"
-        "Вы подписаны на уведомления о новых совпадениях.\n\n"
+        f"{access_text}\n\n"
         "Выберите действие:",
-        reply_markup=main_menu_kb(is_admin=_is_admin(message.from_user.id)),
+        reply_markup=main_menu_kb(is_admin=admin, has_access=bool(access["is_active"])),
         parse_mode="HTML",
     )
 
@@ -76,11 +85,14 @@ async def cmd_unsubscribe(message: Message, repo: Repository):
 
 
 @router.callback_query(F.data == "main_menu")
-async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
+async def cb_main_menu(callback: CallbackQuery, state: FSMContext, repo: Repository):
     await state.clear()
+    user_tg_id = callback.from_user.id
+    admin = is_admin(user_tg_id)
+    access = {"is_active": True} if admin else await repo.get_subscription_access(user_tg_id)
     await callback.message.answer(
         "Главное меню:",
-        reply_markup=main_menu_kb(is_admin=_is_admin(callback.from_user.id)),
+        reply_markup=main_menu_kb(is_admin=admin, has_access=bool(access["is_active"])),
     )
     await callback.answer()
 

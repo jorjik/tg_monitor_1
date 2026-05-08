@@ -4,6 +4,7 @@ from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 
+from bot.access import require_callback_access, require_message_access
 from bot.keyboards import feed_kb, feed_item_kb
 from db.repository import Repository
 
@@ -14,11 +15,15 @@ PAGE_SIZE = 5
 @router.message(F.text == "📰 Лента")
 @router.message(Command("feed"))
 async def cmd_feed(message: Message, repo: Repository):
+    if not await require_message_access(message, repo):
+        return
     await _show(message, repo, message.from_user.id, 0, edit=False)
 
 
 @router.callback_query(F.data.startswith("feed_page:"))
 async def cb_feed_page(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     page = int(callback.data.split(":")[1])
     await _show(callback.message, repo, callback.from_user.id, page, edit=True)
     await callback.answer()
@@ -50,6 +55,8 @@ async def _show(msg, repo: Repository, user_tg_id: int, page: int, edit: bool):
 
 @router.callback_query(F.data.startswith("feed_item:"))
 async def cb_feed_item(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     parts = callback.data.split(":")
     item_id, back = int(parts[1]), int(parts[2]) if len(parts) > 2 else 0
     user_tg_id = callback.from_user.id
@@ -79,6 +86,8 @@ async def cb_feed_item(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data.startswith("read_item:"))
 async def cb_read_item(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     parts = callback.data.split(":")
     item_id, back = int(parts[1]), int(parts[2]) if len(parts) > 2 else 0
     user_tg_id = callback.from_user.id
@@ -89,6 +98,8 @@ async def cb_read_item(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data == "feed_read_all")
 async def cb_read_all(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     await repo.mark_all_read(user_tg_id)
     await callback.answer("✅ Все прочитаны")

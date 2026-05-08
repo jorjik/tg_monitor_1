@@ -6,6 +6,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
+from bot.access import require_callback_access, require_message_access
 from bot.states import KeywordForm
 from bot.keyboards import keywords_kb, cancel_kb, keyword_confirm_kb
 from db.repository import Repository
@@ -87,6 +88,8 @@ def _keywords_preview(keywords: list[str]) -> str:
 @router.message(F.text == "🔑 Ключевые слова")
 @router.message(Command("keywords"))
 async def cmd_keywords(message: Message, repo: Repository):
+    if not await require_message_access(message, repo):
+        return
     user_tg_id = message.from_user.id
     kws = await repo.get_keywords(user_tg_id, topic_id=None)
     active = sum(1 for k in kws if k["is_active"])
@@ -100,6 +103,8 @@ async def cmd_keywords(message: Message, repo: Repository):
 
 @router.callback_query(F.data.startswith("kw_topic:"))
 async def cb_kw_topic(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     user_tg_id = callback.from_user.id
     topic_id = int(callback.data.split(":")[1])
     kws = await repo.get_keywords(user_tg_id, topic_id=topic_id)
@@ -114,6 +119,8 @@ async def cb_kw_topic(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data.startswith("toggle_kw:"))
 async def cb_toggle_kw(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     parts = callback.data.split(":")
     kw_id = int(parts[1])
     scope = parts[2] if len(parts) > 2 else "global"
@@ -131,7 +138,9 @@ async def cb_toggle_kw(callback: CallbackQuery, repo: Repository):
 
 
 @router.callback_query(F.data.startswith("add_kw"))
-async def cb_add_kw_start(callback: CallbackQuery, state: FSMContext):
+async def cb_add_kw_start(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
     parts = callback.data.split(":")
     scope = parts[1] if len(parts) > 1 else "global"
     await state.update_data(kw_topic_id=None if scope == "global" else int(scope))
@@ -147,6 +156,9 @@ async def cb_add_kw_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(KeywordForm.waiting_keyword)
 async def process_keyword(message: Message, state: FSMContext, repo: Repository):
+    if not await require_message_access(message, repo):
+        await state.clear()
+        return
     user_tg_id = message.from_user.id
     raw = message.text or ""
     try:
@@ -192,6 +204,9 @@ async def process_keyword(message: Message, state: FSMContext, repo: Repository)
 
 @router.callback_query(KeywordForm.waiting_confirm_keywords, F.data == "kw_confirm:add")
 async def cb_confirm_keywords(callback: CallbackQuery, state: FSMContext, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        await state.clear()
+        return
     user_tg_id = callback.from_user.id
     data = await state.get_data()
     topic_id = data.get("kw_topic_id")
