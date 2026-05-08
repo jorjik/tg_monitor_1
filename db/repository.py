@@ -351,6 +351,18 @@ class Repository:
             )
             return [dict(r) for r in await cur.fetchall()]
 
+    async def get_history_chats(self, user_tg_id: int) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT c.*, t.id as topic_id, t.name as topic_name FROM chats c "
+                "JOIN topics t ON t.id = c.topic_id "
+                "WHERE t.user_tg_id = ? "
+                "ORDER BY t.name, c.title",
+                (user_tg_id,),
+            )
+            return [dict(r) for r in await cur.fetchall()]
+
     async def toggle_chat(self, user_tg_id: int, chat_id: int) -> bool:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute(

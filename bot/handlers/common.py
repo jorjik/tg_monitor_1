@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from bot.keyboards import main_menu_kb
+from core.config import ADMIN_USER_ID
 from db.repository import Repository
 
 router = Router()
@@ -26,6 +27,10 @@ HELP_TEXT = """
 """
 
 
+def _is_admin(user_tg_id: int) -> bool:
+    return bool(ADMIN_USER_ID and user_tg_id == ADMIN_USER_ID)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, repo: Repository):
     await state.clear()
@@ -40,7 +45,7 @@ async def cmd_start(message: Message, state: FSMContext, repo: Repository):
         "👋 <b>Добро пожаловать в Telegram Monitor!</b>\n\n"
         "Вы подписаны на уведомления о новых совпадениях.\n\n"
         "Выберите действие:",
-        reply_markup=main_menu_kb(),
+        reply_markup=main_menu_kb(is_admin=_is_admin(message.from_user.id)),
         parse_mode="HTML",
     )
 
@@ -73,7 +78,10 @@ async def cmd_unsubscribe(message: Message, repo: Repository):
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.answer("Главное меню:", reply_markup=main_menu_kb())
+    await callback.message.answer(
+        "Главное меню:",
+        reply_markup=main_menu_kb(is_admin=_is_admin(callback.from_user.id)),
+    )
     await callback.answer()
 
 

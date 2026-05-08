@@ -7,14 +7,17 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
+def main_menu_kb(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text="📋 Темы"), KeyboardButton(text="➕ Новая тема")],
+        [KeyboardButton(text="🔑 Ключевые слова"), KeyboardButton(text="📰 Лента")],
+        [KeyboardButton(text="⚙️ Мониторинг"), KeyboardButton(text="🚫 Гео-фильтр")],
+        [KeyboardButton(text="❓ Помощь")],
+    ]
+    if is_admin:
+        keyboard.insert(3, [KeyboardButton(text="🕘 История")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📋 Темы"), KeyboardButton(text="➕ Новая тема")],
-            [KeyboardButton(text="🔑 Ключевые слова"), KeyboardButton(text="📰 Лента")],
-            [KeyboardButton(text="⚙️ Мониторинг"), KeyboardButton(text="🚫 Гео-фильтр")],
-            [KeyboardButton(text="❓ Помощь")],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
     )
 
@@ -44,7 +47,7 @@ def topic_detail_kb(topic_id: int) -> InlineKeyboardMarkup:
 
 
 def chats_kb(
-    chats: list[dict], topic_id: int, page: int = 0, page_size: int = 8, is_admin: bool = False
+    chats: list[dict], topic_id: int, page: int = 0, page_size: int = 8
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     start = page * page_size
@@ -54,19 +57,11 @@ def chats_kb(
         ticon = "📢" if c["chat_type"] == "channel" else "👥"
         title = c["title"][:28]
         members = c.get("members_count", 0)
-        toggle = InlineKeyboardButton(
+        b.button(
             text=f"{icon} {ticon} {title} ({members:,})",
             callback_data=f"toggle_chat:{c['id']}:{topic_id}:{page}",
         )
-        if is_admin:
-            b.row(
-                toggle,
-                InlineKeyboardButton(
-                    text="🕘", callback_data=f"history_chat:{c['id']}:{topic_id}:{page}"
-                ),
-            )
-        else:
-            b.row(toggle)
+    b.adjust(1)
     nav = []
     if page > 0:
         nav.append(

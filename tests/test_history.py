@@ -1,6 +1,11 @@
-import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import tempfile
+import unittest
 
+from bot.handlers.history import _result_summary
+from bot.keyboards import main_menu_kb
+from db.repository import Repository
 from userbot.history import (
     HISTORY_TIMEZONE,
     HistoryScanner,
@@ -137,6 +142,70 @@ class HistoryScannerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.preview[0].url, "https://t.me/chatname/3")
         self.assertEqual(repo.saved[0]["matched_keywords"], ["надо сайт"])
         self.assertEqual(client.calls[0], ("chatname", end, 10))
+
+
+class HistoryKeyboardTest(unittest.TestCase):
+    def test_history_button_is_admin_only_in_main_menu(self):
+        admin_buttons = [
+            button.text for row in main_menu_kb(is_admin=True).keyboard for button in row
+        ]
+        user_buttons = [button.text for row in main_menu_kb().keyboard for button in row]
+
+        self.assertIn("🕘 История", admin_buttons)
+        self.assertNotIn("🕘 История", user_buttons)
+
+
+class HistorySummaryTest(unittest.TestCase):
+    def test_summary_reports_aggregate_chat_counts(self):
+        start = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+
+        text = _result_summary(
+            start,
+            end,
+            total_chats=4,
+            totals={
+                "scanned": 20,
+                "matched": 3,
+                "saved": 2,
+                "keywords": 5,
+                "limited_chats": 1,
+                "skipped_no_keywords": 1,
+                "errors": 1,
+            },
+            previews=[],
+        )
+
+        self.assertIn("Чатов всего:</b> 4", text)
+        self.assertIn("Чатов просканировано:</b> 2", text)
+        self.assertIn("Пропущено без ключевых слов: 1", text)
+        self.assertIn("Уже были в ленте: 1", text)
+        self.assertIn("Чатов с ошибкой: 1", text)
+
+
+class HistoryRepositoryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_lists_all_history_chats_with_topic_context(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Repository(str(Path(td) / "db.sqlite"))
+            await repo.init_db()
+            user_id = 123
+            topic_id = await repo.create_topic(user_id, "бизнес", "бизнес")
+            await repo.save_chat(topic_id, 777, "chat", "Chat", "channel", 10)
+            chat = (await repo.get_chats(user_id, topic_id))[0]
+            await repo.toggle_chat(user_id, chat["id"])
+            other_topic_id = await repo.create_topic(user_id, "фриланс", "фриланс")
+            await repo.save_chat(other_topic_id, 888, None, "Other", "supergroup", 5)
+            other_user_topic_id = await repo.create_topic(999, "чужое", "чужое")
+            await repo.save_chat(other_user_topic_id, 999, None, "Foreign", "supergroup", 1)
+
+            chats = await repo.get_history_chats(user_id)
+
+            self.assertEqual([chat["tg_id"] for chat in chats], [777, 888])
+            self.assertEqual(chats[0]["topic_id"], topic_id)
+            self.assertEqual(chats[0]["topic_name"], "бизнес")
+            self.assertEqual(chats[0]["is_active"], 0)
+            self.assertEqual(chats[1]["topic_id"], other_topic_id)
+            self.assertEqual(chats[1]["topic_name"], "фриланс")
 
 
 if __name__ == "__main__":
