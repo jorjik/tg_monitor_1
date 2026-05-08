@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from bot.handlers.history import _result_summary
-from bot.keyboards import main_menu_kb
+from bot.keyboards import history_interval_kb, main_menu_kb
 from db.repository import Repository
 from userbot.history import (
     HISTORY_TIMEZONE,
@@ -22,6 +22,14 @@ class HistoryHelpersTest(unittest.TestCase):
         start, end = parse_history_interval("24ч", now=now)
 
         self.assertEqual(start, now - timedelta(hours=24))
+        self.assertEqual(end, now)
+
+    def test_parses_relative_days_interval(self):
+        now = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+
+        start, end = parse_history_interval("7д", now=now)
+
+        self.assertEqual(start, now - timedelta(days=7))
         self.assertEqual(end, now)
 
     def test_uses_kyiv_timezone_by_default(self):
@@ -153,6 +161,22 @@ class HistoryKeyboardTest(unittest.TestCase):
 
         self.assertIn("🕘 История", admin_buttons)
         self.assertNotIn("🕘 История", user_buttons)
+
+    def test_history_interval_keyboard_has_only_two_choices(self):
+        buttons = [
+            button
+            for row in history_interval_kb().inline_keyboard
+            for button in row
+        ]
+
+        self.assertEqual(
+            [button.text for button in buttons],
+            ["24ч — последние 24 часа", "7д — последние 7 дней"],
+        )
+        self.assertEqual(
+            [button.callback_data for button in buttons],
+            ["history_interval:24ч", "history_interval:7д"],
+        )
 
 
 class HistorySummaryTest(unittest.TestCase):

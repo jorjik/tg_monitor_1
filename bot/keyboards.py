@@ -170,6 +170,14 @@ def cancel_kb() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def history_interval_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="24ч — последние 24 часа", callback_data="history_interval:24ч")
+    b.button(text="7д — последние 7 дней", callback_data="history_interval:7д")
+    b.adjust(1)
+    return b.as_markup()
+
+
 def keyword_confirm_kb() -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✅ Добавить", callback_data="kw_confirm:add")
