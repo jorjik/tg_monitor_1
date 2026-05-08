@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 
 from bot.access import require_callback_access, require_message_access
 from bot.states import KeywordForm
-from bot.keyboards import keywords_kb, cancel_kb, keyword_confirm_kb
+from bot.keyboards import cancel_kb, keyword_confirm_kb, keywords_kb, minus_words_kb
 from db.repository import Repository
 
 router = Router()
@@ -113,6 +113,43 @@ async def cb_kw_topic(callback: CallbackQuery, repo: Repository):
         f"🔑 <b>Ключевые слова темы</b>\n"
         f"Всего: {len(kws)} | Активных: {active}",
         reply_markup=keywords_kb(kws, topic_id=topic_id), parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "kw_global")
+async def cb_kw_global(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
+    user_tg_id = callback.from_user.id
+    kws = await repo.get_keywords(user_tg_id, topic_id=None)
+    active = sum(1 for k in kws if k["is_active"])
+    await callback.message.edit_text(
+        f"🔑 <b>Глобальные ключевые слова</b>\n"
+        f"Всего: {len(kws)} | Активных: {active}\n\n"
+        "Применяются ко всем темам:",
+        reply_markup=keywords_kb(kws, topic_id=None), parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("minus_words:"))
+async def cb_minus_words(callback: CallbackQuery, repo: Repository):
+    if not await require_callback_access(callback, repo):
+        return
+    scope = callback.data.split(":", 1)[1]
+    try:
+        topic_id = None if scope == "global" else int(scope)
+    except ValueError:
+        await callback.answer("❌ Некорректный запрос", show_alert=True)
+        return
+    title = "Глобальные минус-слова" if topic_id is None else "Минус-слова темы"
+    await callback.message.edit_text(
+        f"➖ <b>{title}</b>\n\n"
+        "Минус-слова будут исключать ненужные совпадения из ленты.\n"
+        "Раздел подготовлен, добавление слов подключим следующим шагом.",
+        reply_markup=minus_words_kb([], topic_id),
+        parse_mode="HTML",
     )
     await callback.answer()
 

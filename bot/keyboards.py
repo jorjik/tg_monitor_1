@@ -106,10 +106,25 @@ def keywords_kb(
     b.adjust(2)
     suffix = f":{topic_id}" if topic_id is not None else ":global"
     b.row(InlineKeyboardButton(text="➕ Добавить", callback_data=f"add_kw{suffix}"))
+    b.row(InlineKeyboardButton(text="➖ Минус-слова", callback_data=f"minus_words{suffix}"))
     if topic_id is None:
         b.row(InlineKeyboardButton(text="◀️ Меню", callback_data="main_menu"))
     else:
         b.row(InlineKeyboardButton(text="◀️ К теме", callback_data=f"topic:{topic_id}"))
+    return b.as_markup()
+
+
+def minus_words_kb(words: list[str], topic_id: int | None = None) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    scope = "global" if topic_id is None else str(topic_id)
+    for index, word in enumerate(words):
+        b.button(text=f"➖ {word}", callback_data=f"minus_word:{scope}:{index}")
+    if topic_id is None:
+        back = InlineKeyboardButton(text="◀️ К ключевым словам", callback_data="kw_global")
+    else:
+        back = InlineKeyboardButton(text="◀️ К ключевым словам темы", callback_data=f"kw_topic:{topic_id}")
+    b.adjust(1)
+    b.row(back)
     return b.as_markup()
 
 
