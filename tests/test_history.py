@@ -184,7 +184,7 @@ class HistorySummaryTest(unittest.TestCase):
 
 
 class HistoryRepositoryTest(unittest.IsolatedAsyncioTestCase):
-    async def test_lists_all_history_chats_with_topic_context(self):
+    async def test_lists_active_history_chats_with_topic_context(self):
         with tempfile.TemporaryDirectory() as td:
             repo = Repository(str(Path(td) / "db.sqlite"))
             await repo.init_db()
@@ -195,17 +195,31 @@ class HistoryRepositoryTest(unittest.IsolatedAsyncioTestCase):
             await repo.toggle_chat(user_id, chat["id"])
             other_topic_id = await repo.create_topic(user_id, "фриланс", "фриланс")
             await repo.save_chat(other_topic_id, 888, None, "Other", "supergroup", 5)
+            alpha_topic_id = await repo.create_topic(user_id, "авто", "авто")
+            await repo.save_chat(alpha_topic_id, 889, None, "Alpha", "supergroup", 7)
             other_user_topic_id = await repo.create_topic(999, "чужое", "чужое")
             await repo.save_chat(other_user_topic_id, 999, None, "Foreign", "supergroup", 1)
 
             chats = await repo.get_history_chats(user_id)
 
-            self.assertEqual([chat["tg_id"] for chat in chats], [777, 888])
-            self.assertEqual(chats[0]["topic_id"], topic_id)
-            self.assertEqual(chats[0]["topic_name"], "бизнес")
-            self.assertEqual(chats[0]["is_active"], 0)
+            self.assertEqual([chat["tg_id"] for chat in chats], [889, 888])
+            self.assertEqual(chats[0]["topic_id"], alpha_topic_id)
+            self.assertEqual(chats[0]["topic_name"], "авто")
+            self.assertEqual(chats[0]["is_active"], 1)
             self.assertEqual(chats[1]["topic_id"], other_topic_id)
             self.assertEqual(chats[1]["topic_name"], "фриланс")
+
+    async def test_returns_empty_when_history_chats_are_inactive(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Repository(str(Path(td) / "db.sqlite"))
+            await repo.init_db()
+            user_id = 123
+            topic_id = await repo.create_topic(user_id, "бизнес", "бизнес")
+            await repo.save_chat(topic_id, 777, "chat", "Chat", "channel", 10)
+            chat = (await repo.get_chats(user_id, topic_id))[0]
+            await repo.toggle_chat(user_id, chat["id"])
+
+            self.assertEqual(await repo.get_history_chats(user_id), [])
 
 
 if __name__ == "__main__":

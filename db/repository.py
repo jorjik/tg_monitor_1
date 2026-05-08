@@ -357,7 +357,7 @@ class Repository:
             cur = await db.execute(
                 "SELECT c.*, t.id as topic_id, t.name as topic_name FROM chats c "
                 "JOIN topics t ON t.id = c.topic_id "
-                "WHERE t.user_tg_id = ? "
+                "WHERE c.is_active = 1 AND t.user_tg_id = ? "
                 "ORDER BY t.name, c.title",
                 (user_tg_id,),
             )

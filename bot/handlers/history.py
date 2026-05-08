@@ -76,12 +76,12 @@ async def cmd_history(message: Message, state: FSMContext, repo: Repository):
         return
     chats = await repo.get_history_chats(user_tg_id)
     if not chats:
-        await message.answer("⚠️ Нет сохранённых чатов для разового поиска истории.")
+        await message.answer("⚠️ Нет активных чатов для разового поиска истории.")
         return
     await state.set_state(HistoryForm.waiting_interval)
     await message.answer(
         f"🕘 <b>Разовый поиск по истории</b>\n\n"
-        f"Сохранённых чатов: <b>{len(chats)}</b>\n\n"
+        f"Активных чатов: <b>{len(chats)}</b>\n\n"
         "Введите интервал:\n"
         "• <code>24ч</code> — последние 24 часа\n"
         "• <code>7д</code> — последние 7 дней\n"
@@ -112,7 +112,7 @@ async def process_history_interval(
 
     chats = await repo.get_history_chats(user_tg_id)
     if not chats:
-        await message.answer("⚠️ Нет сохранённых чатов для разового поиска истории.")
+        await message.answer("⚠️ Нет активных чатов для разового поиска истории.")
         return
 
     scanner = HistoryScanner(client=collector.client, repo=repo)
