@@ -133,10 +133,11 @@ async def _send_kofi_payment(callback: CallbackQuery, repo: Repository, tariff: 
         f"Тариф: <b>{html.escape(tariff['name'])}</b>\n"
         f"Сумма: <b>{amount} {html.escape(KO_FI_CURRENCY)}</b>\n"
         f"Срок: <b>{tariff['duration_days']}</b> дней\n"
-        f"Код платежа: <code>{html.escape(intent['code'])}</code>\n\n"
         "1. Нажмите «Открыть Ko-fi».\n"
-        "2. Оплатите сумму выше.\n"
-        "3. В сообщение к платежу вставьте код платежа.\n\n"
+        "2. <b>Важно:</b> после перехода жмите внизу кнопку <b>\"tip\"</b>.\n"
+        "3. Оплатите сумму выше.\n"
+        "4. В сообщение к платежу вставьте ваш код платежа:\n"
+        f"<code>{html.escape(intent['code'])}</code>\n\n"
         "После webhook бот активирует подписку автоматически. "
         "Если код не попал в сообщение, напишите администратору.",
         reply_markup=kofi_payment_kb(KO_FI_PAGE_URL),
