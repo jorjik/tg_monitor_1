@@ -88,7 +88,7 @@ def chats_kb(
         ]
         
         if c.get("username"):
-            row.append(InlineKeyboardButton(text="↗️", url=f"https://t.me/{c['username']}"))
+            row.append(InlineKeyboardButton(text="открыть", url=f"https://t.me/{c['username']}"))
             
         b.row(*row)
     nav = []
