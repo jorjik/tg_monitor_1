@@ -77,14 +77,20 @@ def chats_kb(
     end = start + page_size
     for c in chats[start:end]:
         icon = "✅" if c["is_active"] else "⭕"
-        ticon = "📢" if c["chat_type"] == "channel" else "👥"
-        title = c["title"][:28]
+        title = c["title"][:25]
         members = c.get("members_count", 0)
-        b.button(
-            text=f"{icon} {ticon} {title} ({members:,})",
-            callback_data=f"toggle_chat:{c['id']}:{topic_id}:{page}",
-        )
-    b.adjust(1)
+        
+        row = [
+            InlineKeyboardButton(
+                text=f"{icon} {title} ({members:,})",
+                callback_data=f"toggle_chat:{c['id']}:{topic_id}:{page}"
+            )
+        ]
+        
+        if c.get("username"):
+            row.append(InlineKeyboardButton(text="↗️", url=f"https://t.me/{c['username']}"))
+            
+        b.row(*row)
     nav = []
     if page > 0:
         nav.append(
