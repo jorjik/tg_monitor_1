@@ -14,6 +14,7 @@ def main_menu_kb(is_admin: bool = False, has_access: bool = True) -> ReplyKeyboa
         return ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="💳 Подписка")],
+                [KeyboardButton(text="🤝 Партнерка")],
                 [KeyboardButton(text="❓ Помощь")],
             ],
             resize_keyboard=True,
@@ -25,10 +26,10 @@ def main_menu_kb(is_admin: bool = False, has_access: bool = True) -> ReplyKeyboa
     ]
     if is_admin:
         keyboard.append([KeyboardButton(text="🕘 История"), KeyboardButton(text="💎 Тарифы")])
-        keyboard.append([KeyboardButton(text="❓ Помощь")])
+        keyboard.append([KeyboardButton(text="🤝 Партнерка"), KeyboardButton(text="❓ Помощь")])
     else:
         keyboard.append([KeyboardButton(text="🕘 История"), KeyboardButton(text="💳 Подписка")])
-        keyboard.append([KeyboardButton(text="❓ Помощь")])
+        keyboard.append([KeyboardButton(text="🤝 Партнерка"), KeyboardButton(text="❓ Помощь")])
     return ReplyKeyboardMarkup(
         keyboard=keyboard,
         resize_keyboard=True,
@@ -227,6 +228,7 @@ def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
             text=f"💳 PayPal: {tariff['name']} — {tariff['duration_days']} дн.",
             callback_data=f"billing_paypal:{tariff['id']}",
         )
+    b.button(text="🔙 Назад", callback_data="main_menu")
     b.adjust(1)
     return b.as_markup()
 

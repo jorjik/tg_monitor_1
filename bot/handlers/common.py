@@ -29,27 +29,61 @@ HELP_TEXT = """
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext, repo: Repository):
+async def cmd_start(message: Message, state: FSMContext, repo: Repository, bot):
     await state.clear()
     if not message.from_user:
         return
     user_tg_id = message.from_user.id
-    await repo.upsert_bot_user(
+    
+    # Check for referral code
+    referred_by = None
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith("ref_"):
+        try:
+            ref_id = int(args[1].replace("ref_", ""))
+            if ref_id != user_tg_id: # Cannot refer self
+                referred_by = ref_id
+        except ValueError:
+            pass
+
+    is_new = await repo.upsert_bot_user(
         tg_id=user_tg_id,
         username=message.from_user.username,
         first_name=message.from_user.first_name,
         last_name=message.from_user.last_name,
+        referred_by=referred_by
     )
+
+    # Grant bonus if new user invited by someone
+    bonus_applied = False
+    if is_new and referred_by:
+        bonus_applied = await repo.apply_referral_bonus(user_tg_id, referred_by, days=14)
+        if bonus_applied:
+            # Notify referrer
+            try:
+                await bot.send_message(
+                    referred_by,
+                    f"🎉 По вашей ссылке присоединился новый пользователь!\n"
+                    f"Вам и ему начислено по <b>14 дней</b> подписки бонус!",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
     admin = is_admin(user_tg_id)
     access = {"is_active": True, "status": "admin", "expires_at": None}
     if not admin:
         access = await repo.ensure_trial(user_tg_id)
+    
     if admin:
         access_text = "Админ-доступ активен."
     elif access["is_active"]:
         access_text = f"Доступ активен до <code>{access['expires_at']}</code>."
+        if bonus_applied:
+            access_text += "\n🎁 Вам начислено 14 дней за переход по реферальной ссылке!"
     else:
         access_text = "Демо-доступ закончился. Откройте <b>💳 Подписка</b> для оплаты."
+
     await message.answer(
         "👋 <b>Добро пожаловать в Telegram Monitor!</b>\n\n"
         f"{access_text}\n\n"
@@ -82,6 +116,36 @@ async def cmd_unsubscribe(message: Message, repo: Repository):
     if message.from_user:
         await repo.deactivate_bot_user(message.from_user.id)
     await message.answer("⭕ Уведомления выключены. Чтобы включить снова, отправьте /subscribe.")
+
+
+@router.message(F.text == "🤝 Партнерка")
+@router.message(Command("partner"))
+@router.message(Command("referral"))
+async def cmd_referral(message: Message, repo: Repository, bot):
+    user_tg_id = message.from_user.id
+    bot_info = await bot.get_me()
+    ref_link = f"https://t.me/{bot_info.username}?start=ref_{user_tg_id}"
+    
+    stats = await repo.get_referral_stats(user_tg_id)
+    
+    text = (
+        "🤝 <b>Партнерская программа</b>\n\n"
+        "Приглашайте друзей и получайте бонусы! 🎁\n\n"
+        "<b>Условия:</b>\n"
+        "— Вы получаете <b>14 дней</b> подписки за каждого приглашенного.\n"
+        "— Ваш друг также получает <b>14 дней</b> доступа сразу после входа.\n\n"
+        f"👥 Приглашено друзей: <b>{stats['count']}</b>\n\n"
+        f"🔗 <b>Ваша ссылка:</b>\n<code>{ref_link}</code>\n\n"
+        "<i>Просто отправьте эту ссылку другу!</i>"
+    )
+    
+    await message.answer(text, parse_mode="HTML")
+
+
+@router.callback_query(F.data == "referral")
+async def cb_referral(callback: CallbackQuery, repo: Repository, bot):
+    await cmd_referral(callback.message, repo, bot)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "main_menu")

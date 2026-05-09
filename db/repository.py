@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS bot_users (
     first_name TEXT,
     last_name TEXT,
     is_active INTEGER DEFAULT 1,
+    referred_by INTEGER REFERENCES bot_users(tg_id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -177,6 +178,14 @@ class Repository:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA foreign_keys = OFF")
             await db.executescript(CREATE_SCHEMA)
+            
+            # Migration: referred_by
+            try:
+                await db.execute("ALTER TABLE bot_users ADD COLUMN referred_by INTEGER REFERENCES bot_users(tg_id)")
+                await db.commit()
+            except aiosqlite.OperationalError:
+                pass
+                
             await self._migrate_topics(db)
             await self._migrate_keywords(db)
             await self._migrate_feed(db)
@@ -359,20 +368,62 @@ class Repository:
         username: Optional[str],
         first_name: Optional[str],
         last_name: Optional[str],
-    ) -> None:
+        referred_by: Optional[int] = None,
+    ) -> bool:
+        """Returns True if user was newly created."""
         async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT tg_id FROM bot_users WHERE tg_id = ?", (tg_id,)) as cursor:
+                exists = await cursor.fetchone() is not None
+
+            if not exists:
+                await db.execute(
+                    "INSERT INTO bot_users (tg_id, username, first_name, last_name, referred_by, is_active) "
+                    "VALUES (?, ?, ?, ?, ?, 1)",
+                    (tg_id, username, first_name, last_name, referred_by),
+                )
+            else:
+                await db.execute(
+                    "UPDATE bot_users SET username = ?, first_name = ?, last_name = ?, is_active = 1, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE tg_id = ?",
+                    (username, first_name, last_name, tg_id),
+                )
+            await db.commit()
+            return not exists
+
+    async def apply_referral_bonus(self, user_tg_id: int, referrer_tg_id: int, days: int = 14) -> bool:
+        """Apply bonus days to both users."""
+        await self.add_subscription_days(user_tg_id, days)
+        await self.add_subscription_days(referrer_tg_id, days)
+        return True
+
+    async def add_subscription_days(self, user_tg_id: int, days: int) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            now = _utc_now()
+            # Ensure subscription record exists
             await db.execute(
-                "INSERT INTO bot_users (tg_id, username, first_name, last_name, is_active) "
-                "VALUES (?, ?, ?, ?, 1) "
-                "ON CONFLICT(tg_id) DO UPDATE SET "
-                "username = excluded.username, "
-                "first_name = excluded.first_name, "
-                "last_name = excluded.last_name, "
-                "is_active = 1, "
-                "updated_at = CURRENT_TIMESTAMP",
-                (tg_id, username, first_name, last_name),
+                "INSERT OR IGNORE INTO user_subscriptions (user_tg_id, status, expires_at) VALUES (?, ?, ?)",
+                (user_tg_id, "trial", _format_ts(now))
+            )
+            await db.execute(
+                """
+                UPDATE user_subscriptions 
+                SET expires_at = datetime(
+                    CASE WHEN expires_at > CURRENT_TIMESTAMP THEN expires_at ELSE CURRENT_TIMESTAMP END,
+                    '+' || ? || ' days'
+                )
+                WHERE user_tg_id = ?
+                """,
+                (days, user_tg_id),
             )
             await db.commit()
+
+    async def get_referral_stats(self, user_tg_id: int) -> dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM bot_users WHERE referred_by = ?", (user_tg_id,)
+            ) as cursor:
+                count = (await cursor.fetchone())[0]
+                return {"count": count}
 
     async def deactivate_bot_user(self, tg_id: int) -> None:
         async with aiosqlite.connect(self.db_path) as db:
