@@ -30,3 +30,4 @@ PAYPAL_CLIENT_ID: str = os.getenv("PAYPAL_CLIENT_ID", "").strip()
 PAYPAL_CLIENT_SECRET: str = os.getenv("PAYPAL_CLIENT_SECRET", "").strip()
 PAYPAL_MODE: str = os.getenv("PAYPAL_MODE", "sandbox").strip()  # sandbox or live
 PAYPAL_CURRENCY: str = os.getenv("PAYPAL_CURRENCY", "USD").strip().upper()
+PAYPAL_AMOUNT_PER_STAR: str = os.getenv("PAYPAL_AMOUNT_PER_STAR", "1").strip()
