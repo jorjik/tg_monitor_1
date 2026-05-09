@@ -6,6 +6,8 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from core.config import KO_FI_PAGE_URL
+
 
 def main_menu_kb(is_admin: bool = False, has_access: bool = True) -> ReplyKeyboardMarkup:
     if not is_admin and not has_access:
@@ -214,13 +216,28 @@ def history_interval_kb() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
+def subscription_kb(tariffs: list[dict], include_kofi: bool | None = None) -> InlineKeyboardMarkup:
+    if include_kofi is None:
+        include_kofi = bool(KO_FI_PAGE_URL)
     b = InlineKeyboardBuilder()
     for tariff in tariffs:
         b.button(
             text=f"⭐ {tariff['name']} — {tariff['stars']} Stars / {tariff['duration_days']} дн.",
             callback_data=f"billing_pay:{tariff['id']}",
         )
+        if include_kofi:
+            b.button(
+                text=f"🌍 Ko-fi — {tariff['name']} / {tariff['duration_days']} дн.",
+                callback_data=f"billing_kofi:{tariff['id']}",
+            )
+    b.adjust(1)
+    return b.as_markup()
+
+
+def kofi_payment_kb(page_url: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="🌍 Открыть Ko-fi", url=page_url)
+    b.button(text="◀️ К подписке", callback_data="billing_back")
     b.adjust(1)
     return b.as_markup()
 

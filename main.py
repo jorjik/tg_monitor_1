@@ -13,6 +13,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 from bot.handlers import billing, common, feed, geo_filter, history, keywords, monitor, topics
+from bot.kofi_webhook import start_kofi_webhook
 from core.config import (
     API_HASH,
     API_ID,
@@ -100,10 +101,13 @@ async def main() -> None:
     dp.include_router(monitor.router)
     dp.include_router(geo_filter.router)
 
+    webhook_runner = await start_kofi_webhook(bot, repo)
     logger.info("Бот запускается...")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if webhook_runner:
+            await webhook_runner.cleanup()
         await watcher.stop()
         await userbot.disconnect()
         await bot.session.close()

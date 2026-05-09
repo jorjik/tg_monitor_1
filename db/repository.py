@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -25,6 +26,12 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+
+def _payment_code() -> str:
+    return f"KF-{secrets.token_hex(5).upper()}"
+
+
 
 CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS topics (
@@ -116,6 +123,35 @@ CREATE TABLE IF NOT EXISTS payments (
     telegram_payment_charge_id TEXT NOT NULL UNIQUE,
     provider_payment_charge_id TEXT,
     paid_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS payment_intents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    user_tg_id INTEGER NOT NULL,
+    tariff_id INTEGER NOT NULL REFERENCES tariffs(id),
+    amount TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    duration_days INTEGER NOT NULL CHECK(duration_days >= 1),
+    status TEXT NOT NULL DEFAULT 'pending',
+    provider_payment_id TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    paid_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS kofi_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_payment_id TEXT NOT NULL UNIQUE,
+    intent_id INTEGER REFERENCES payment_intents(id),
+    user_tg_id INTEGER,
+    tariff_id INTEGER,
+    code TEXT,
+    amount TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    raw_payload TEXT NOT NULL,
+    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -848,6 +884,210 @@ class Repository:
             )
             await db.commit()
             return cur.rowcount > 0
+
+    async def create_kofi_payment_intent(
+        self,
+        user_tg_id: int,
+        tariff_id: int,
+        amount: str,
+        currency: str,
+        duration_days: int,
+        code: Optional[str] = None,
+    ) -> Optional[dict]:
+        amount = amount.strip()
+        currency = currency.strip().upper()
+        if not amount or not currency or duration_days <= 0:
+            raise ValueError("Invalid Ko-fi payment intent")
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT * FROM tariffs WHERE id = ? AND is_active = 1",
+                (tariff_id,),
+            )
+            if not await cur.fetchone():
+                return None
+            for _ in range(8):
+                intent_code = (code or _payment_code()).strip().upper()
+                try:
+                    cur = await db.execute(
+                        "INSERT INTO payment_intents "
+                        "(provider, code, user_tg_id, tariff_id, amount, currency, duration_days) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            "kofi",
+                            intent_code,
+                            user_tg_id,
+                            tariff_id,
+                            amount,
+                            currency,
+                            duration_days,
+                        ),
+                    )
+                except aiosqlite.IntegrityError:
+                    if code:
+                        raise
+                    continue
+                await db.commit()
+                cur = await db.execute(
+                    "SELECT * FROM payment_intents WHERE id = ?",
+                    (cur.lastrowid,),
+                )
+                row = await cur.fetchone()
+                return dict(row) if row else None
+        raise RuntimeError("Unable to create unique Ko-fi payment code")
+
+    async def record_kofi_payment(
+        self,
+        provider_payment_id: str,
+        code: Optional[str],
+        amount: str,
+        currency: str,
+        raw_payload: str,
+    ) -> dict:
+        provider_payment_id = provider_payment_id.strip()
+        code = code.strip().upper() if code else None
+        amount = amount.strip()
+        currency = currency.strip().upper()
+        if not provider_payment_id or not amount or not currency:
+            raise ValueError("Invalid Ko-fi payment")
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            duplicate = await self._kofi_payment_result(db, provider_payment_id)
+            if duplicate:
+                return duplicate
+
+            intent = None
+            status = "manual_review"
+            reason = "code_missing"
+            if code:
+                cur = await db.execute(
+                    "SELECT * FROM payment_intents WHERE provider = ? AND code = ?",
+                    ("kofi", code),
+                )
+                intent = await cur.fetchone()
+                if not intent:
+                    reason = "intent_not_found"
+                elif intent["status"] != "pending":
+                    reason = "intent_not_pending"
+                elif intent["amount"] != amount or intent["currency"].upper() != currency:
+                    reason = "amount_or_currency_mismatch"
+                else:
+                    status = "paid"
+                    reason = None
+
+            intent_id = intent["id"] if intent else None
+            user_tg_id = intent["user_tg_id"] if intent else None
+            tariff_id = intent["tariff_id"] if intent else None
+            duration_days = intent["duration_days"] if intent else None
+            try:
+                await db.execute(
+                    "INSERT INTO kofi_payments "
+                    "(provider_payment_id, intent_id, user_tg_id, tariff_id, code, amount, "
+                    "currency, status, reason, raw_payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        provider_payment_id,
+                        intent_id,
+                        user_tg_id,
+                        tariff_id,
+                        code,
+                        amount,
+                        currency,
+                        status,
+                        reason,
+                        raw_payload,
+                    ),
+                )
+            except aiosqlite.IntegrityError:
+                duplicate = await self._kofi_payment_result(db, provider_payment_id)
+                if duplicate:
+                    return duplicate
+                raise
+
+            if status != "paid":
+                await db.commit()
+                return {
+                    "status": status,
+                    "reason": reason,
+                    "inserted": True,
+                    "expires_at": None,
+                    "user_tg_id": user_tg_id,
+                    "tariff_id": tariff_id,
+                }
+
+            cur = await db.execute(
+                "UPDATE payment_intents SET status = ?, provider_payment_id = ?, "
+                "paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ? AND status = ?",
+                ("paid", provider_payment_id, intent_id, "pending"),
+            )
+            if cur.rowcount == 0:
+                await db.execute(
+                    "UPDATE kofi_payments SET status = ?, reason = ? WHERE provider_payment_id = ?",
+                    ("manual_review", "intent_not_pending", provider_payment_id),
+                )
+                await db.commit()
+                return {
+                    "status": "manual_review",
+                    "reason": "intent_not_pending",
+                    "inserted": True,
+                    "expires_at": None,
+                    "user_tg_id": user_tg_id,
+                    "tariff_id": tariff_id,
+                }
+
+            await db.execute(
+                "INSERT INTO user_subscriptions "
+                "(user_tg_id, status, tariff_id, started_at, expires_at, updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, datetime(CURRENT_TIMESTAMP, '+' || ? || ' days'), CURRENT_TIMESTAMP) "
+                "ON CONFLICT(user_tg_id) DO UPDATE SET "
+                "status = excluded.status, "
+                "tariff_id = excluded.tariff_id, "
+                "started_at = CASE "
+                "WHEN user_subscriptions.status = 'paid' "
+                "AND user_subscriptions.started_at IS NOT NULL "
+                "THEN user_subscriptions.started_at ELSE excluded.started_at END, "
+                "expires_at = datetime("
+                "CASE WHEN user_subscriptions.expires_at > CURRENT_TIMESTAMP "
+                "THEN user_subscriptions.expires_at ELSE CURRENT_TIMESTAMP END, "
+                "'+' || ? || ' days'), "
+                "updated_at = CURRENT_TIMESTAMP",
+                (user_tg_id, "paid", tariff_id, duration_days, duration_days),
+            )
+            cur = await db.execute(
+                "SELECT expires_at FROM user_subscriptions WHERE user_tg_id = ?",
+                (user_tg_id,),
+            )
+            row = await cur.fetchone()
+            await db.commit()
+            return {
+                "status": "paid",
+                "reason": None,
+                "inserted": True,
+                "expires_at": row["expires_at"] if row else None,
+                "user_tg_id": user_tg_id,
+                "tariff_id": tariff_id,
+            }
+
+    async def _kofi_payment_result(self, db, provider_payment_id: str) -> Optional[dict]:
+        cur = await db.execute(
+            "SELECT kp.*, us.expires_at FROM kofi_payments kp "
+            "LEFT JOIN user_subscriptions us ON us.user_tg_id = kp.user_tg_id "
+            "WHERE kp.provider_payment_id = ?",
+            (provider_payment_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return None
+        payment = dict(row)
+        return {
+            "status": payment["status"],
+            "reason": payment.get("reason"),
+            "inserted": False,
+            "expires_at": payment.get("expires_at"),
+            "user_tg_id": payment.get("user_tg_id"),
+            "tariff_id": payment.get("tariff_id"),
+        }
 
     async def record_payment(
         self,

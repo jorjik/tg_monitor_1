@@ -1,4 +1,5 @@
 import html
+import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -6,9 +7,19 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 
 from bot.access import is_admin
-from bot.keyboards import admin_tariff_detail_kb, admin_tariffs_kb, main_menu_kb, subscription_kb
+from bot.keyboards import (
+    admin_tariff_detail_kb,
+    admin_tariffs_kb,
+    kofi_payment_kb,
+    main_menu_kb,
+    subscription_kb,
+)
+from bot.kofi import kofi_amount_for_tariff
 from bot.states import BillingAdminForm
+from core.config import KO_FI_AMOUNT_PER_STAR, KO_FI_CURRENCY, KO_FI_PAGE_URL
 from db.repository import Repository
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -77,6 +88,42 @@ async def _show_subscription(message: Message, repo: Repository, user_tg_id: int
     )
 
 
+async def _send_kofi_payment(callback: CallbackQuery, repo: Repository, tariff: dict) -> None:
+    if not KO_FI_PAGE_URL:
+        await callback.answer("Ko-fi пока не настроен.", show_alert=True)
+        return
+    try:
+        amount = kofi_amount_for_tariff(tariff, KO_FI_AMOUNT_PER_STAR)
+    except ValueError:
+        await callback.answer("Ko-fi цена настроена некорректно.", show_alert=True)
+        return
+    intent = await repo.create_kofi_payment_intent(
+        user_tg_id=callback.from_user.id,
+        tariff_id=tariff["id"],
+        amount=amount,
+        currency=KO_FI_CURRENCY,
+        duration_days=tariff["duration_days"],
+    )
+    if not intent:
+        await callback.answer("Тариф недоступен.", show_alert=True)
+        return
+    await callback.message.answer(
+        "🌍 <b>Оплата через Ko-fi</b>\n\n"
+        f"Тариф: <b>{html.escape(tariff['name'])}</b>\n"
+        f"Сумма: <b>{amount} {html.escape(KO_FI_CURRENCY)}</b>\n"
+        f"Срок: <b>{tariff['duration_days']}</b> дней\n"
+        f"Код платежа: <code>{html.escape(intent['code'])}</code>\n\n"
+        "1. Нажмите «Открыть Ko-fi».\n"
+        "2. Оплатите сумму выше.\n"
+        "3. В сообщение к платежу вставьте код платежа.\n\n"
+        "После webhook бот активирует подписку автоматически. "
+        "Если код не попал в сообщение, напишите администратору.",
+        reply_markup=kofi_payment_kb(KO_FI_PAGE_URL),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
 @router.message(F.text == "💳 Подписка")
 @router.message(Command("subscription"))
 @router.message(Command("billing"))
@@ -102,35 +149,62 @@ async def cb_billing_pay(callback: CallbackQuery, repo: Repository):
         await callback.answer("Тариф недоступен.", show_alert=True)
         return
     payload = _payload(callback.from_user.id, tariff)
-    await callback.bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title=f"Подписка: {tariff['name']}",
-        description=f"Доступ к боту на {tariff['duration_days']} дней",
-        payload=payload,
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label=tariff["name"], amount=tariff["stars"])],
-    )
+    logger.info(f"Sending invoice to user {callback.from_user.id} for tariff {tariff['id']} ({tariff['stars']} stars)")
+    try:
+        await callback.bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=f"Подписка: {tariff['name']}",
+            description=f"Доступ к боту на {tariff['duration_days']} дней",
+            payload=payload,
+            currency="XTR",
+            prices=[LabeledPrice(label="Оплата", amount=tariff["stars"])],
+        )
+    except Exception as e:
+        logger.error(f"Failed to send invoice: {e}")
+        await callback.answer("Ошибка при создании счета. Попробуйте позже.", show_alert=True)
+        return
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("billing_kofi:"))
+async def cb_billing_kofi(callback: CallbackQuery, repo: Repository):
+    tariff_id = int(callback.data.split(":")[1])
+    tariff = await repo.get_tariff(tariff_id, active_only=True)
+    if not tariff:
+        await callback.answer("Тариф недоступен.", show_alert=True)
+        return
+    await _send_kofi_payment(callback, repo, tariff)
+
+
+@router.callback_query(F.data == "billing_back")
+async def cb_billing_back(callback: CallbackQuery, repo: Repository):
+    await callback.answer()
+    await _show_subscription(callback.message, repo, callback.from_user.id)
 
 
 @router.pre_checkout_query()
 async def pre_checkout(pre_checkout_query: PreCheckoutQuery, repo: Repository):
+    logger.info(f"PreCheckoutQuery from {pre_checkout_query.from_user.id}: {pre_checkout_query.invoice_payload}")
     parsed = _parse_payload(pre_checkout_query.invoice_payload)
     if not parsed:
+        logger.warning(f"Invalid payload in pre_checkout: {pre_checkout_query.invoice_payload}")
         await pre_checkout_query.answer(ok=False, error_message="Некорректный платёж.")
         return
     user_tg_id, tariff_id, stars, _duration_days = parsed
     if user_tg_id != pre_checkout_query.from_user.id:
+        logger.warning(f"User mismatch in pre_checkout: {user_tg_id} != {pre_checkout_query.from_user.id}")
         await pre_checkout_query.answer(ok=False, error_message="Этот счёт создан для другого пользователя.")
         return
     tariff = await repo.get_tariff(tariff_id, active_only=True)
     if not tariff:
+        logger.warning(f"Tariff {tariff_id} not found or inactive in pre_checkout")
         await pre_checkout_query.answer(ok=False, error_message="Тариф больше недоступен.")
         return
     if pre_checkout_query.currency != "XTR" or pre_checkout_query.total_amount != stars:
+        logger.warning(f"Price mismatch in pre_checkout: {pre_checkout_query.currency}={pre_checkout_query.total_amount} vs XTR={stars}")
         await pre_checkout_query.answer(ok=False, error_message="Цена тарифа изменилась. Создайте новый счёт.")
         return
+    logger.info(f"PreCheckoutQuery OK for user {pre_checkout_query.from_user.id}")
     await pre_checkout_query.answer(ok=True)
 
 
@@ -139,30 +213,42 @@ async def successful_payment(message: Message, repo: Repository):
     if not message.from_user:
         return
     payment = message.successful_payment
+    logger.info(f"SuccessfulPayment from {message.from_user.id}: {payment.total_amount} {payment.currency}")
     parsed = _parse_payload(payment.invoice_payload)
     if not parsed:
+        logger.error(f"Invalid payload in successful_payment: {payment.invoice_payload}")
         await message.answer("Платёж получен, но назначение не распознано. Напишите администратору.")
         return
     user_tg_id, tariff_id, stars, duration_days = parsed
     if user_tg_id != message.from_user.id:
+        logger.error(f"User mismatch in successful_payment: {user_tg_id} != {message.from_user.id}")
         await message.answer("Платёж получен, но пользователь не совпал. Напишите администратору.")
         return
     if payment.currency != "XTR" or payment.total_amount != stars:
+        logger.error(f"Price mismatch in successful_payment: {payment.currency}={payment.total_amount} vs XTR={stars}")
         await message.answer("Платёж получен, но сумма не совпала с тарифом. Напишите администратору.")
         return
-    expires_at, inserted = await repo.record_payment(
-        user_tg_id=user_tg_id,
-        tariff_id=tariff_id,
-        payload=payment.invoice_payload,
-        currency=payment.currency,
-        stars=payment.total_amount,
-        duration_days=duration_days,
-        telegram_payment_charge_id=payment.telegram_payment_charge_id,
-        provider_payment_charge_id=payment.provider_payment_charge_id or "",
-    )
+    try:
+        expires_at, inserted = await repo.record_payment(
+            user_tg_id=user_tg_id,
+            tariff_id=tariff_id,
+            payload=payment.invoice_payload,
+            currency=payment.currency,
+            stars=payment.total_amount,
+            duration_days=duration_days,
+            telegram_payment_charge_id=payment.telegram_payment_charge_id,
+            provider_payment_charge_id=payment.provider_payment_charge_id or "",
+        )
+    except Exception as e:
+        logger.error(f"Failed to record payment in DB: {e}")
+        await message.answer("Платёж получен, но произошла ошибка в базе данных. Напишите администратору.")
+        return
+        
     if not expires_at:
+        logger.error(f"Record payment failed for user {user_tg_id}, tariff {tariff_id}")
         await message.answer("Платёж получен, но тариф не найден. Напишите администратору.")
         return
+    logger.info(f"Subscription recorded for user {user_tg_id} until {expires_at}")
     prefix = "✅ Подписка активирована" if inserted else "✅ Подписка уже была активирована"
     await message.answer(
         f"{prefix} до <code>{expires_at}</code>.",
