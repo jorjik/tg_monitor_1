@@ -216,20 +216,13 @@ def history_interval_kb() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def subscription_kb(tariffs: list[dict], include_kofi: bool | None = None) -> InlineKeyboardMarkup:
-    if include_kofi is None:
-        include_kofi = bool(KO_FI_PAGE_URL)
+def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for tariff in tariffs:
         b.button(
-            text=f"⭐ {tariff['name']} — {tariff['stars']} Stars / {tariff['duration_days']} дн.",
-            callback_data=f"billing_pay:{tariff['id']}",
+            text=f"🌍 Оплатить: {tariff['name']} — {tariff['duration_days']} дн.",
+            callback_data=f"billing_kofi:{tariff['id']}",
         )
-        if include_kofi:
-            b.button(
-                text=f"🌍 Ko-fi — {tariff['name']} / {tariff['duration_days']} дн.",
-                callback_data=f"billing_kofi:{tariff['id']}",
-            )
     b.adjust(1)
     return b.as_markup()
 
