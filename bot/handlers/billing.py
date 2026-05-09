@@ -7,16 +7,25 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.access import is_admin
+
 from bot.keyboards import (
     admin_tariff_detail_kb,
     admin_tariffs_kb,
     kofi_payment_kb,
     main_menu_kb,
+    paypal_payment_kb,
     subscription_kb,
 )
 from bot.kofi import kofi_amount_for_tariff
+from bot.paypal import PayPalClient
 from bot.states import BillingAdminForm
-from core.config import KO_FI_AMOUNT_PER_STAR, KO_FI_CURRENCY, KO_FI_PAGE_URL
+from core.config import (
+    KO_FI_AMOUNT_PER_STAR,
+    KO_FI_CURRENCY,
+    KO_FI_PAGE_URL,
+    PAYPAL_AMOUNT_PER_STAR,
+    PAYPAL_CURRENCY,
+)
 from db.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -161,6 +170,109 @@ async def cb_billing_kofi(callback: CallbackQuery, repo: Repository):
         await callback.answer("Тариф недоступен.", show_alert=True)
         return
     await _send_kofi_payment(callback, repo, tariff)
+
+
+@router.callback_query(F.data.startswith("billing_paypal:"))
+async def cb_billing_paypal(callback: CallbackQuery, repo: Repository):
+    tariff_id = int(callback.data.split(":")[1])
+    tariff = await repo.get_tariff(tariff_id, active_only=True)
+    if not tariff:
+        await callback.answer("Тариф недоступен.", show_alert=True)
+        return
+
+    from bot.kofi import kofi_amount_for_tariff # Reuse logic for calculation
+    try:
+        amount = kofi_amount_for_tariff(tariff, PAYPAL_AMOUNT_PER_STAR)
+    except ValueError:
+        await callback.answer("Ошибка настройки цены PayPal.", show_alert=True)
+        return
+
+    paypal = PayPalClient()
+    order = await paypal.create_order(
+        amount=amount,
+        currency=PAYPAL_CURRENCY,
+        reference_id=f"user_{callback.from_user.id}_tariff_{tariff_id}"
+    )
+
+    if not order:
+        await callback.answer("Не удалось создать заказ PayPal.", show_alert=True)
+        return
+
+    order_id = order["id"]
+    approval_url = next(link["href"] for link in order["links"] if link["rel"] == "approve")
+
+    await repo.create_paypal_payment(
+        order_id=order_id,
+        user_tg_id=callback.from_user.id,
+        tariff_id=tariff_id,
+        amount=amount,
+        currency=PAYPAL_CURRENCY
+    )
+
+    await callback.message.edit_text(
+        f"💳 <b>Оплата через PayPal</b>\n\n"
+        f"Тариф: <b>{html.escape(tariff['name'])}</b>\n"
+        f"Сумма к оплате: <b>{amount} {PAYPAL_CURRENCY}</b>\n\n"
+        "1. Нажмите кнопку ниже для перехода в PayPal.\n"
+        "2. После завершения оплаты вернитесь сюда и нажмите <b>Проверить статус</b>.",
+        reply_markup=paypal_payment_kb(approval_url, order_id),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("paypal_check:"))
+async def cb_paypal_check(callback: CallbackQuery, repo: Repository):
+    order_id = callback.data.split(":")[1]
+    paypal = PayPalClient()
+    
+    # Check current status
+    order = await paypal.get_order(order_id)
+    if not order:
+        await callback.answer("Заказ не найден в PayPal.", show_alert=True)
+        return
+
+    status = order["status"]
+    
+    if status == "APPROVED":
+        # Capture the payment
+        capture = await paypal.capture_order(order_id)
+        if capture and capture.get("status") == "COMPLETED":
+            result = await repo.record_paypal_payment(order_id, "COMPLETED")
+            if result["status"] == "COMPLETED":
+                await callback.message.edit_text(
+                    f"✅ Оплата PayPal успешно получена!\n\n"
+                    f"Подписка активна до <code>{result['expires_at']}</code>.",
+                    reply_markup=main_menu_kb(is_admin=is_admin(callback.from_user.id), has_access=True),
+                    parse_mode="HTML"
+                )
+                return
+            else:
+                await callback.answer(f"Ошибка сохранения: {result.get('reason')}", show_alert=True)
+        else:
+            await callback.answer("Не удалось завершить платеж (Capture failed).", show_alert=True)
+    elif status == "COMPLETED":
+        # Check if already recorded
+        result = await repo.record_paypal_payment(order_id, "COMPLETED")
+        if result["status"] == "already_paid":
+            await callback.answer("Этот платеж уже был обработан.", show_alert=True)
+        elif result["status"] == "COMPLETED":
+            await callback.message.edit_text(
+                f"✅ Оплата PayPal подтверждена!\n\n"
+                f"Подписка активна до <code>{result['expires_at']}</code>.",
+                reply_markup=main_menu_kb(is_admin=is_admin(callback.from_user.id), has_access=True),
+                parse_mode="HTML"
+            )
+        else:
+             await callback.answer("Ошибка обработки статуса COMPLETED.", show_alert=True)
+    else:
+        await callback.answer(f"Статус платежа: {status}. Оплатите заказ в PayPal или попробуйте позже.", show_alert=True)
+
+
+@router.callback_query(F.data == "billing_back")
+async def cb_billing_back(callback: CallbackQuery, repo: Repository):
+    await callback.answer()
+    await _show_subscription(callback.message, repo, callback.from_user.id)
 
 
 async def _show_admin_tariffs(message: Message, repo: Repository) -> None:

@@ -220,8 +220,12 @@ def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for tariff in tariffs:
         b.button(
-            text=f"🌍 Оплатить: {tariff['name']} — {tariff['duration_days']} дн.",
+            text=f"🌍 Ko-fi: {tariff['name']} — {tariff['duration_days']} дн.",
             callback_data=f"billing_kofi:{tariff['id']}",
+        )
+        b.button(
+            text=f"💳 PayPal: {tariff['name']} — {tariff['duration_days']} дн.",
+            callback_data=f"billing_paypal:{tariff['id']}",
         )
     b.adjust(1)
     return b.as_markup()
@@ -230,6 +234,15 @@ def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
 def kofi_payment_kb(page_url: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🌍 Открыть Ko-fi", url=page_url)
+    b.button(text="◀️ К подписке", callback_data="billing_back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def paypal_payment_kb(approval_url: str, order_id: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="💳 Оплатить через PayPal", url=approval_url)
+    b.button(text="✅ Проверить статус", callback_data=f"paypal_check:{order_id}")
     b.button(text="◀️ К подписке", callback_data="billing_back")
     b.adjust(1)
     return b.as_markup()

@@ -153,6 +153,16 @@ CREATE TABLE IF NOT EXISTS kofi_payments (
     raw_payload TEXT NOT NULL,
     received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS paypal_payments (
+    order_id TEXT PRIMARY KEY,
+    user_tg_id INTEGER NOT NULL,
+    tariff_id INTEGER NOT NULL REFERENCES tariffs(id),
+    amount TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    captured_at TIMESTAMP
+);
 """
 
 
@@ -1203,3 +1213,84 @@ class Repository:
                     (user_tg_id, key, value),
                 )
             await db.commit()
+    async def create_paypal_payment(
+        self, order_id: str, user_tg_id: int, tariff_id: int, amount: str, currency: str
+    ) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO paypal_payments (order_id, user_tg_id, tariff_id, amount, currency, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (order_id, user_tg_id, tariff_id, amount, currency, "created"),
+            )
+            await db.commit()
+
+    async def get_paypal_payment(self, order_id: str) -> Optional[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM paypal_payments WHERE order_id = ?", (order_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def record_paypal_payment(self, order_id: str, status: str) -> dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            payment = await (await db.execute(
+                "SELECT * FROM paypal_payments WHERE order_id = ?", (order_id,)
+            )).fetchone()
+            
+            if not payment:
+                return {"status": "error", "reason": "not_found"}
+                
+            if payment["status"] == "COMPLETED":
+                return {"status": "already_paid"}
+
+            if status != "COMPLETED":
+                await db.execute(
+                    "UPDATE paypal_payments SET status = ? WHERE order_id = ?",
+                    (status, order_id)
+                )
+                await db.commit()
+                return {"status": status}
+
+            # Update order status
+            now = datetime.now(timezone.utc)
+            await db.execute(
+                """
+                UPDATE paypal_payments 
+                SET status = 'COMPLETED', captured_at = ?
+                WHERE order_id = ?
+                """,
+                (_format_ts(now), order_id),
+            )
+
+            # Record standard payment and update subscription
+            tariff = await (await db.execute(
+                "SELECT * FROM tariffs WHERE id = ?", (payment["tariff_id"],)
+            )).fetchone()
+            
+            if not tariff:
+                await db.commit()
+                return {"status": "error", "reason": "tariff_not_found"}
+
+            expires_at, inserted = await self.record_payment(
+                user_tg_id=payment["user_tg_id"],
+                tariff_id=payment["tariff_id"],
+                payload=f"paypal:{order_id}",
+                currency=payment["currency"],
+                stars=tariff["stars"],
+                duration_days=tariff["duration_days"],
+                telegram_payment_charge_id="",
+                provider_payment_charge_id=order_id,
+            )
+            
+            await db.commit()
+            return {
+                "status": "COMPLETED",
+                "user_tg_id": payment["user_tg_id"],
+                "expires_at": expires_at,
+                "inserted": inserted
+            }

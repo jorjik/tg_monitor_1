@@ -24,3 +24,9 @@ KO_FI_AMOUNT_PER_STAR: str = os.getenv("KO_FI_AMOUNT_PER_STAR", "1").strip()
 KO_FI_WEBHOOK_HOST: str = os.getenv("KO_FI_WEBHOOK_HOST", "0.0.0.0").strip()
 KO_FI_WEBHOOK_PORT: int = _int_env("KO_FI_WEBHOOK_PORT", 8080)
 KO_FI_WEBHOOK_PATH: str = os.getenv("KO_FI_WEBHOOK_PATH", "/webhooks/kofi").strip()
+
+# PayPal
+PAYPAL_CLIENT_ID: str = os.getenv("PAYPAL_CLIENT_ID", "").strip()
+PAYPAL_CLIENT_SECRET: str = os.getenv("PAYPAL_CLIENT_SECRET", "").strip()
+PAYPAL_MODE: str = os.getenv("PAYPAL_MODE", "sandbox").strip()  # sandbox or live
+PAYPAL_CURRENCY: str = os.getenv("PAYPAL_CURRENCY", "USD").strip().upper()
