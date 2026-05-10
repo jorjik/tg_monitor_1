@@ -12,7 +12,17 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-from bot.handlers import billing, common, feed, geo_filter, history, keywords, monitor, topics
+from bot.handlers import (
+    admin_users,
+    billing,
+    common,
+    feed,
+    geo_filter,
+    history,
+    keywords,
+    monitor,
+    topics,
+)
 from bot.kofi_webhook import start_kofi_webhook
 from core.config import (
     API_HASH,
@@ -92,6 +102,7 @@ async def main() -> None:
     dp["collector"] = collector
     dp["watcher"] = watcher
 
+    dp.include_router(admin_users.router)
     dp.include_router(common.router)
     dp.include_router(billing.router)
     dp.include_router(topics.router)

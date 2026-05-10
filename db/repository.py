@@ -433,6 +433,29 @@ class Repository:
             )
             await db.commit()
 
+    async def get_bot_user(self, tg_id: int) -> Optional[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM bot_users WHERE tg_id = ?", (tg_id,)) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
+    async def search_bot_user(self, query: str) -> Optional[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Search by username or First/Last name
+            async with db.execute(
+                """
+                SELECT * FROM bot_users 
+                WHERE username LIKE ? 
+                OR (first_name || ' ' || last_name) LIKE ?
+                LIMIT 1
+                """,
+                (f"%{query}%", f"%{query}%"),
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
     async def get_active_bot_user_ids(self) -> list[int]:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT tg_id FROM bot_users WHERE is_active = 1")

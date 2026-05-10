@@ -26,7 +26,8 @@ def main_menu_kb(is_admin: bool = False, has_access: bool = True) -> ReplyKeyboa
     ]
     if is_admin:
         keyboard.append([KeyboardButton(text="🕘 История"), KeyboardButton(text="💎 Тарифы")])
-        keyboard.append([KeyboardButton(text="🤝 Партнерка"), KeyboardButton(text="❓ Помощь")])
+        keyboard.append([KeyboardButton(text="👥 Пользователи"), KeyboardButton(text="🤝 Партнерка")])
+        keyboard.append([KeyboardButton(text="❓ Помощь")])
     else:
         keyboard.append([KeyboardButton(text="🕘 История"), KeyboardButton(text="💳 Подписка")])
         keyboard.append([KeyboardButton(text="🤝 Партнерка"), KeyboardButton(text="❓ Помощь")])
@@ -279,6 +280,17 @@ def admin_tariff_detail_kb(tariff: dict) -> InlineKeyboardMarkup:
     b.button(text=toggle, callback_data=f"admin_tariff_toggle:{tariff['id']}")
     b.button(text="◀️ К тарифам", callback_data="admin_tariffs")
     b.adjust(1)
+    return b.as_markup()
+
+
+def admin_user_detail_kb(user_tg_id: int) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="➕ 14 дней", callback_data=f"admin_user_add:{user_tg_id}:14")
+    b.button(text="➕ 30 дней", callback_data=f"admin_user_add:{user_tg_id}:30")
+    b.button(text="➕ 100 дней", callback_data=f"admin_user_add:{user_tg_id}:100")
+    b.button(text="➕ Своё число", callback_data=f"admin_user_add_custom:{user_tg_id}")
+    b.button(text="◀️ Назад", callback_data="admin_users")
+    b.adjust(3, 1, 1)
     return b.as_markup()
 
 

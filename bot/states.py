@@ -26,3 +26,8 @@ class BillingAdminForm(StatesGroup):
     waiting_stars = State()
     waiting_days = State()
     waiting_trial_days = State()
+
+
+class AdminUserForm(StatesGroup):
+    waiting_search = State()
+    waiting_custom_days = State()
