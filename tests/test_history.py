@@ -4,7 +4,7 @@ import tempfile
 import unittest
 
 from bot.handlers.history import _result_summary
-from bot.keyboards import history_interval_kb, main_menu_kb
+from bot.keyboards import history_interval_kb, history_result_kb, main_menu_kb
 from db.repository import Repository
 from userbot.history import (
     HISTORY_TIMEZONE,
@@ -177,6 +177,16 @@ class HistoryKeyboardTest(unittest.TestCase):
             [button.callback_data for button in buttons],
             ["history_interval:24ч", "history_interval:7д"],
         )
+
+    def test_history_result_keyboard_returns_to_main_menu(self):
+        buttons = [
+            button
+            for row in history_result_kb().inline_keyboard
+            for button in row
+        ]
+
+        self.assertEqual([button.text for button in buttons], ["◀️ Назад"])
+        self.assertEqual([button.callback_data for button in buttons], ["main_menu"])
 
 
 class HistorySummaryTest(unittest.TestCase):

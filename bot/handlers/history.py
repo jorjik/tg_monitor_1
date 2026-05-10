@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.access import require_callback_access, require_message_access
-from bot.keyboards import history_interval_kb
+from bot.keyboards import history_interval_kb, history_result_kb
 from bot.states import HistoryForm
 from db.repository import Repository
 from userbot.collector import ChatCollector
@@ -190,6 +190,7 @@ async def process_history_interval(
         _result_summary(start, end, len(chats), totals, previews),
         parse_mode="HTML",
         disable_web_page_preview=True,
+        reply_markup=history_result_kb(),
     )
 
 

@@ -224,6 +224,12 @@ def history_interval_kb() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def history_result_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="◀️ Назад", callback_data="main_menu")
+    return b.as_markup()
+
+
 def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for tariff in tariffs:
