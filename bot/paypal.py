@@ -60,7 +60,7 @@ class PayPalClient:
             "application_context": {
                 "shipping_preference": "NO_SHIPPING",
                 "user_action": "PAY_NOW",
-                "landing_page": "GUEST_CHECKOUT"
+                "landing_page": "BILLING"
             }
         }
 
