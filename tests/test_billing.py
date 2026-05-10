@@ -211,13 +211,13 @@ class BillingKeyboardTest(unittest.TestCase):
         self.assertEqual(
             subscription_buttons,
             [
-                "🌍 Ko-fi: Месяц — 30 дн.",
-                "💳 PayPal: Месяц — 30 дн.",
+                "🌍 Ko-fi — 30 дн.",
+                "💳 PayPal — 30 дн.",
                 "💳 Перевод на карту (UA/USD)",
                 "🔙 Назад",
             ],
         )
-        self.assertIn("✅ Месяц — 100⭐ / 30 дн.", admin_buttons)
+        self.assertIn("✅ 100⭐ / 30 дн.", admin_buttons)
         self.assertIn("➕ Новый тариф", admin_buttons)
         self.assertIn("💳 Способы оплаты", admin_buttons)
 
@@ -233,7 +233,7 @@ class BillingKeyboardTest(unittest.TestCase):
             for button in row
         ]
 
-        self.assertEqual(buttons, ["💳 PayPal: Месяц — 30 дн.", "🔙 Назад"])
+        self.assertEqual(buttons, ["💳 PayPal — 30 дн.", "🔙 Назад"])
 
     def test_admin_payment_methods_keyboard_toggles_each_method(self):
         buttons = [

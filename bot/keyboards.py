@@ -238,12 +238,12 @@ def subscription_kb(
     for tariff in tariffs:
         if _payment_enabled(payment_methods, "kofi"):
             b.button(
-                text=f"🌍 Ko-fi: {tariff['name']} — {tariff['duration_days']} дн.",
+                text=f"🌍 Ko-fi — {tariff['duration_days']} дн.",
                 callback_data=f"billing_kofi:{tariff['id']}",
             )
         if _payment_enabled(payment_methods, "paypal"):
             b.button(
-                text=f"💳 PayPal: {tariff['name']} — {tariff['duration_days']} дн.",
+                text=f"💳 PayPal — {tariff['duration_days']} дн.",
                 callback_data=f"billing_paypal:{tariff['id']}",
             )
     if _payment_enabled(payment_methods, "manual"):
@@ -283,7 +283,7 @@ def admin_tariffs_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
     for tariff in tariffs:
         icon = "✅" if tariff["is_active"] else "⭕"
         b.button(
-            text=f"{icon} {tariff['name']} — {tariff['stars']}⭐ / {tariff['duration_days']} дн.",
+            text=f"{icon} {tariff['stars']}⭐ / {tariff['duration_days']} дн.",
             callback_data=f"admin_tariff:{tariff['id']}",
         )
     b.button(text="➕ Новый тариф", callback_data="admin_tariff:new")

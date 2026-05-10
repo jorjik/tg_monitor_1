@@ -132,8 +132,8 @@ class KofiKeyboardTest(unittest.TestCase):
         self.assertEqual(
             buttons,
             [
-                "🌍 Ko-fi: Месяц — 30 дн.",
-                "💳 PayPal: Месяц — 30 дн.",
+                "🌍 Ko-fi — 30 дн.",
+                "💳 PayPal — 30 дн.",
                 "💳 Перевод на карту (UA/USD)",
                 "🔙 Назад",
             ],
