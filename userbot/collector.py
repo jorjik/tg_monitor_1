@@ -110,6 +110,7 @@ class ChatCollector:
                     continue
 
                 username: Optional[str] = getattr(entity, "username", None)
+                access_hash: Optional[int] = getattr(entity, "access_hash", None)
                 title: str = getattr(entity, "title", str(tg_id))
                 members: int = getattr(entity, "participants_count", 0) or 0
 
@@ -129,6 +130,7 @@ class ChatCollector:
                 found[tg_id] = {
                     "tg_id": tg_id,
                     "username": username,
+                    "access_hash": access_hash,
                     "title": title,
                     "chat_type": chat_type,
                     "members_count": members,
@@ -137,6 +139,7 @@ class ChatCollector:
                     topic_id=topic_id,
                     tg_id=tg_id,
                     username=username,
+                    access_hash=access_hash,
                     title=title,
                     chat_type=chat_type,
                     members_count=members,
@@ -197,6 +200,7 @@ class ChatCollector:
         members: int = getattr(entity, "participants_count", 0) or 0
         tg_id: int = entity.id
         entity_username: Optional[str] = getattr(entity, "username", None)
+        access_hash: Optional[int] = getattr(entity, "access_hash", None)
 
         if isinstance(entity, Channel):
             chat_type = "channel" if entity.broadcast else "supergroup"
@@ -209,6 +213,7 @@ class ChatCollector:
             topic_id=topic_id,
             tg_id=tg_id,
             username=entity_username,
+            access_hash=access_hash,
             title=title,
             chat_type=chat_type,
             members_count=members,

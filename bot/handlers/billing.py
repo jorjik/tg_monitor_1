@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.access import is_admin
 
 from bot.keyboards import (
+    admin_payment_methods_kb,
     admin_tariff_detail_kb,
     admin_tariffs_kb,
     kofi_payment_kb,
@@ -32,6 +33,11 @@ from db.repository import Repository
 logger = logging.getLogger(__name__)
 
 router = Router()
+PAYMENT_METHOD_LABELS = {
+    "kofi": "Ko-fi",
+    "paypal": "PayPal",
+    "manual": "Перевод на карту",
+}
 
 
 def _payload(user_tg_id: int, tariff: dict) -> str:
@@ -75,7 +81,7 @@ def _tariff_text(tariff: dict) -> str:
         price_text = f"{amount} {KO_FI_CURRENCY}"
     except ValueError:
         price_text = f"{tariff['stars']} Stars (ошибка цены)"
-        
+
     return (
         f"💎 <b>{html.escape(tariff['name'])}</b>\n\n"
         f"Статус: {active}\n"
@@ -87,6 +93,7 @@ def _tariff_text(tariff: dict) -> str:
 async def _show_subscription(message: Message, repo: Repository, user_tg_id: int) -> None:
     access = await repo.get_subscription_access(user_tg_id)
     tariffs = await repo.get_tariffs(active_only=True)
+    payment_methods = await repo.get_payment_methods()
     if not tariffs:
         await message.answer("Тарифы пока не настроены. Напишите администратору.")
         return
@@ -104,10 +111,30 @@ async def _show_subscription(message: Message, repo: Repository, user_tg_id: int
         "💳 <b>Подписка</b>\n\n"
         f"{_access_text(access)}\n\n"
         "Доступные тарифы:\n"
-        + "\n".join(tariff_lines),
-        reply_markup=subscription_kb(tariffs),
+        + "\n".join(tariff_lines)
+        + (
+            ""
+            if any(payment_methods.values())
+            else "\n\n⚠️ Способы оплаты временно скрыты администратором."
+        ),
+        reply_markup=subscription_kb(tariffs, payment_methods),
         parse_mode="HTML",
     )
+
+
+async def _ensure_payment_method_enabled(
+    callback: CallbackQuery, repo: Repository, method: str
+) -> bool:
+    if is_admin(callback.from_user.id):
+        return True
+    if await repo.is_payment_method_enabled(method):
+        return True
+    label = PAYMENT_METHOD_LABELS.get(method, method)
+    await callback.answer(
+        f"{label} сейчас недоступен.",
+        show_alert=True,
+    )
+    return False
 
 
 async def _send_kofi_payment(callback: CallbackQuery, repo: Repository, tariff: dict) -> None:
@@ -118,6 +145,9 @@ async def _send_kofi_payment(callback: CallbackQuery, repo: Repository, tariff: 
         amount = kofi_amount_for_tariff(tariff, KO_FI_AMOUNT_PER_STAR)
     except ValueError:
         await callback.answer("Ko-fi цена настроена некорректно.", show_alert=True)
+        return
+    if not isinstance(callback.message, Message):
+        await callback.answer("Сообщение недоступно.", show_alert=True)
         return
     intent = await repo.create_kofi_payment_intent(
         user_tg_id=callback.from_user.id,
@@ -166,23 +196,29 @@ async def cmd_subscription(message: Message, repo: Repository):
 
 @router.callback_query(F.data.startswith("billing_kofi:"))
 async def cb_billing_kofi(callback: CallbackQuery, repo: Repository):
+    if not await _ensure_payment_method_enabled(callback, repo, "kofi"):
+        return
     tariff_id = int(callback.data.split(":")[1])
     tariff = await repo.get_tariff(tariff_id, active_only=True)
     if not tariff:
         await callback.answer("Тариф недоступен.", show_alert=True)
+        return
+    if not isinstance(callback.message, Message):
+        await callback.answer("Сообщение недоступно.", show_alert=True)
         return
     await _send_kofi_payment(callback, repo, tariff)
 
 
 @router.callback_query(F.data.startswith("billing_paypal:"))
 async def cb_billing_paypal(callback: CallbackQuery, repo: Repository):
+    if not await _ensure_payment_method_enabled(callback, repo, "paypal"):
+        return
     tariff_id = int(callback.data.split(":")[1])
     tariff = await repo.get_tariff(tariff_id, active_only=True)
     if not tariff:
         await callback.answer("Тариф недоступен.", show_alert=True)
         return
 
-    from bot.kofi import kofi_amount_for_tariff # Reuse logic for calculation
     try:
         amount = kofi_amount_for_tariff(tariff, PAYPAL_AMOUNT_PER_STAR)
     except ValueError:
@@ -201,7 +237,13 @@ async def cb_billing_paypal(callback: CallbackQuery, repo: Repository):
         return
 
     order_id = order["id"]
-    approval_url = next(link["href"] for link in order["links"] if link["rel"] == "approve")
+    approval_url = next(
+        (link["href"] for link in order.get("links", []) if link.get("rel") == "approve"),
+        None,
+    )
+    if not approval_url:
+        await callback.answer("Не удалось получить ссылку PayPal.", show_alert=True)
+        return
 
     await repo.create_paypal_payment(
         order_id=order_id,
@@ -273,6 +315,9 @@ async def cb_paypal_check(callback: CallbackQuery, repo: Repository):
 
 @router.callback_query(F.data == "billing_back")
 async def cb_billing_back(callback: CallbackQuery, repo: Repository):
+    if not isinstance(callback.message, Message):
+        await callback.answer("Сообщение недоступно.", show_alert=True)
+        return
     await callback.answer()
     await _show_subscription(callback.message, repo, callback.from_user.id)
 
@@ -280,10 +325,16 @@ async def cb_billing_back(callback: CallbackQuery, repo: Repository):
 async def _show_admin_tariffs(message: Message, repo: Repository) -> None:
     tariffs = await repo.get_tariffs(active_only=False)
     trial_days = await repo.get_trial_days()
+    payment_methods = await repo.get_payment_methods()
+    enabled_methods = [
+        label for method, label in PAYMENT_METHOD_LABELS.items() if payment_methods.get(method)
+    ]
+    methods_text = ", ".join(enabled_methods) if enabled_methods else "все скрыты"
     await message.answer(
         f"💎 <b>Тарифы</b>\n\n"
         f"Демо-доступ: <b>{trial_days}</b> дней\n"
-        f"Тарифов: <b>{len(tariffs)}</b>",
+        f"Тарифов: <b>{len(tariffs)}</b>\n"
+        f"Оплата: <b>{html.escape(methods_text)}</b>",
         reply_markup=admin_tariffs_kb(tariffs),
         parse_mode="HTML",
     )
@@ -308,6 +359,45 @@ async def cb_admin_tariffs(callback: CallbackQuery, repo: Repository):
         return
     await callback.answer()
     await _show_admin_tariffs(callback.message, repo)
+
+
+async def _show_admin_payment_methods(message: Message, repo: Repository) -> None:
+    payment_methods = await repo.get_payment_methods()
+    lines = [
+        f"{'✅' if payment_methods[method] else '⭕'} {label}"
+        for method, label in PAYMENT_METHOD_LABELS.items()
+    ]
+    await message.answer(
+        "💳 <b>Способы оплаты</b>\n\n"
+        "Нажмите способ, чтобы скрыть или показать его пользователям.\n\n"
+        + "\n".join(lines),
+        reply_markup=admin_payment_methods_kb(payment_methods),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_payment_methods")
+async def cb_admin_payment_methods(callback: CallbackQuery, repo: Repository):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Только для администратора", show_alert=True)
+        return
+    await callback.answer()
+    await _show_admin_payment_methods(callback.message, repo)
+
+
+@router.callback_query(F.data.startswith("admin_payment_toggle:"))
+async def cb_admin_payment_toggle(callback: CallbackQuery, repo: Repository):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Только для администратора", show_alert=True)
+        return
+    method = callback.data.split(":", 1)[1]
+    payment_methods = await repo.get_payment_methods()
+    if method not in payment_methods:
+        await callback.answer("Способ оплаты не найден.", show_alert=True)
+        return
+    await repo.set_payment_method_enabled(method, not payment_methods[method])
+    await callback.answer("Обновлено")
+    await _show_admin_payment_methods(callback.message, repo)
 
 
 @router.callback_query(F.data.startswith("admin_tariff:"))
@@ -497,7 +587,12 @@ async def process_trial_days(message: Message, state: FSMContext, repo: Reposito
 
 
 @router.callback_query(F.data == "billing_manual")
-async def cb_billing_manual(callback: CallbackQuery):
+async def cb_billing_manual(callback: CallbackQuery, repo: Repository):
+    if not await _ensure_payment_method_enabled(callback, repo, "manual"):
+        return
+    if not isinstance(callback.message, Message):
+        await callback.answer("Сообщение недоступно.", show_alert=True)
+        return
     text = (
         "💳 <b>Прямой перевод на карту</b>\n\n"
         "Вы можете оплатить подписку напрямую. "

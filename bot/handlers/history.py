@@ -167,9 +167,17 @@ async def process_history_interval(
             result = await scanner.scan(user_tg_id, chat["topic_id"], chat, start, end)
         except Exception as e:
             totals["errors"] += 1
+            hint = ""
+            if (
+                chat.get("chat_type") in {"channel", "supergroup"}
+                and not chat.get("username")
+                and not chat.get("access_hash")
+            ):
+                hint = "\n\nℹ️ Обновите сбор чатов по этой теме, чтобы сохранить данные доступа к чату."
             await _callback_answer_message(
                 callback,
-                f"⚠️ Не удалось проверить «{html.escape(chat['title'])}»: {html.escape(str(e))}",
+                f"⚠️ Не удалось проверить «{html.escape(chat['title'])}»: "
+                f"{html.escape(str(e))}{hint}",
                 parse_mode="HTML",
             )
             continue

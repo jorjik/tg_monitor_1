@@ -6,9 +6,6 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from core.config import KO_FI_PAGE_URL
-
-
 def main_menu_kb(is_admin: bool = False, has_access: bool = True) -> ReplyKeyboardMarkup:
     if not is_admin and not has_access:
         return ReplyKeyboardMarkup(
@@ -80,17 +77,17 @@ def chats_kb(
         icon = "✅" if c["is_active"] else "⭕"
         title = c["title"][:25]
         members = c.get("members_count", 0)
-        
+
         row = [
             InlineKeyboardButton(
                 text=f"{icon} {title} ({members:,})",
                 callback_data=f"toggle_chat:{c['id']}:{topic_id}:{page}"
             )
         ]
-        
+
         if c.get("username"):
             row.append(InlineKeyboardButton(text="открыть", url=f"https://t.me/{c['username']}"))
-            
+
         b.row(*row)
     nav = []
     if page > 0:
@@ -230,18 +227,27 @@ def history_result_kb() -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
+def _payment_enabled(payment_methods: dict[str, bool] | None, method: str) -> bool:
+    return True if payment_methods is None else bool(payment_methods.get(method))
+
+
+def subscription_kb(
+    tariffs: list[dict], payment_methods: dict[str, bool] | None = None
+) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for tariff in tariffs:
-        b.button(
-            text=f"🌍 Ko-fi: {tariff['name']} — {tariff['duration_days']} дн.",
-            callback_data=f"billing_kofi:{tariff['id']}",
-        )
-        b.button(
-            text=f"💳 PayPal: {tariff['name']} — {tariff['duration_days']} дн.",
-            callback_data=f"billing_paypal:{tariff['id']}",
-        )
-    b.button(text="💳 Перевод на карту (UA/USD)", callback_data="billing_manual")
+        if _payment_enabled(payment_methods, "kofi"):
+            b.button(
+                text=f"🌍 Ko-fi: {tariff['name']} — {tariff['duration_days']} дн.",
+                callback_data=f"billing_kofi:{tariff['id']}",
+            )
+        if _payment_enabled(payment_methods, "paypal"):
+            b.button(
+                text=f"💳 PayPal: {tariff['name']} — {tariff['duration_days']} дн.",
+                callback_data=f"billing_paypal:{tariff['id']}",
+            )
+    if _payment_enabled(payment_methods, "manual"):
+        b.button(text="💳 Перевод на карту (UA/USD)", callback_data="billing_manual")
     b.button(text="🔙 Назад", callback_data="main_menu")
     b.adjust(1)
     return b.as_markup()
@@ -282,6 +288,22 @@ def admin_tariffs_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
         )
     b.button(text="➕ Новый тариф", callback_data="admin_tariff:new")
     b.button(text="🎁 Демо-доступ", callback_data="admin_trial_days")
+    b.button(text="💳 Способы оплаты", callback_data="admin_payment_methods")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def admin_payment_methods_kb(payment_methods: dict[str, bool]) -> InlineKeyboardMarkup:
+    labels = {
+        "kofi": "Ko-fi",
+        "paypal": "PayPal",
+        "manual": "Перевод на карту",
+    }
+    b = InlineKeyboardBuilder()
+    for method, label in labels.items():
+        icon = "✅" if payment_methods.get(method) else "⭕"
+        b.button(text=f"{icon} {label}", callback_data=f"admin_payment_toggle:{method}")
+    b.button(text="◀️ К тарифам", callback_data="admin_tariffs")
     b.adjust(1)
     return b.as_markup()
 

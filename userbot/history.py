@@ -4,6 +4,8 @@ import re
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from telethon.tl.types import InputPeerChannel, PeerChannel, PeerChat
+
 MAX_HISTORY_MESSAGES = 1000
 HISTORY_PREVIEW_LIMIT = 5
 
@@ -109,6 +111,30 @@ def message_url(chat_tg_id: int, username: Optional[str], message_id: int) -> st
     return f"https://t.me/c/{clean_id}/{message_id}"
 
 
+def history_entity_ref(chat: dict) -> str | InputPeerChannel | PeerChannel | PeerChat:
+    username = chat.get("username")
+    if username:
+        return username
+    tg_id = int(chat["tg_id"])
+    clean_id = _clean_peer_id(tg_id)
+    if chat.get("chat_type") in {"channel", "supergroup"}:
+        if chat.get("access_hash"):
+            return InputPeerChannel(clean_id, int(chat["access_hash"]))
+        return PeerChannel(clean_id)
+    if chat.get("chat_type") == "group":
+        return PeerChat(clean_id)
+    raise ValueError(f"Unknown chat_type {chat.get('chat_type')!r} for tg_id {tg_id}")
+
+
+def _clean_peer_id(tg_id: int) -> int:
+    value = str(tg_id)
+    if value.startswith("-100"):
+        return int(value[4:])
+    if value.startswith("-"):
+        return int(value[1:])
+    return tg_id
+
+
 async def _sender_name(message) -> str:
     try:
         sender = await message.get_sender()
@@ -150,7 +176,7 @@ class HistoryScanner:
         if not keywords:
             return HistoryScanResult(0, 0, 0, [], False, [])
 
-        entity_ref = chat.get("username") or chat["tg_id"]
+        entity_ref = history_entity_ref(chat)
         async for message in self.client.iter_messages(
             entity_ref, offset_date=end, limit=max_messages
         ):

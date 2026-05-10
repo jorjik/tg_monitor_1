@@ -4,9 +4,16 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from aiogram.types import Chat, Message
+
 from bot.access import user_has_paid_access
 from bot.handlers.billing import cb_billing_manual
-from bot.keyboards import admin_tariffs_kb, main_menu_kb, subscription_kb
+from bot.keyboards import (
+    admin_payment_methods_kb,
+    admin_tariffs_kb,
+    main_menu_kb,
+    subscription_kb,
+)
 from db import repository as repository_module
 from db.repository import Repository
 
@@ -157,6 +164,23 @@ class BillingRepositoryTest(unittest.IsolatedAsyncioTestCase):
         finally:
             repository_module.ADMIN_USER_ID = previous_admin
 
+    async def test_payment_methods_are_enabled_by_default_and_can_be_toggled(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Repository(str(Path(td) / "db.sqlite"))
+            await repo.init_db()
+
+            self.assertEqual(
+                await repo.get_payment_methods(),
+                {"kofi": True, "paypal": True, "manual": True},
+            )
+
+            await repo.set_payment_method_enabled("paypal", False)
+
+            self.assertEqual(
+                await repo.get_payment_methods(),
+                {"kofi": True, "paypal": False, "manual": True},
+            )
+
 
 class BillingKeyboardTest(unittest.TestCase):
     def test_locked_main_menu_only_shows_subscription_and_help(self):
@@ -173,7 +197,12 @@ class BillingKeyboardTest(unittest.TestCase):
         tariffs = [{"id": 1, "name": "Месяц", "stars": 100, "duration_days": 30, "is_active": 1}]
 
         subscription_buttons = [
-            button.text for row in subscription_kb(tariffs).inline_keyboard for button in row
+            button.text
+            for row in subscription_kb(
+                tariffs,
+                {"kofi": True, "paypal": True, "manual": True},
+            ).inline_keyboard
+            for button in row
         ]
         admin_buttons = [
             button.text for row in admin_tariffs_kb(tariffs).inline_keyboard for button in row
@@ -190,33 +219,86 @@ class BillingKeyboardTest(unittest.TestCase):
         )
         self.assertIn("✅ Месяц — 100⭐ / 30 дн.", admin_buttons)
         self.assertIn("➕ Новый тариф", admin_buttons)
+        self.assertIn("💳 Способы оплаты", admin_buttons)
+
+    def test_subscription_keyboard_hides_disabled_payment_methods(self):
+        tariffs = [{"id": 1, "name": "Месяц", "stars": 100, "duration_days": 30, "is_active": 1}]
+
+        buttons = [
+            button.text
+            for row in subscription_kb(
+                tariffs,
+                {"kofi": False, "paypal": True, "manual": False},
+            ).inline_keyboard
+            for button in row
+        ]
+
+        self.assertEqual(buttons, ["💳 PayPal: Месяц — 30 дн.", "🔙 Назад"])
+
+    def test_admin_payment_methods_keyboard_toggles_each_method(self):
+        buttons = [
+            (button.text, button.callback_data)
+            for row in admin_payment_methods_kb(
+                {"kofi": True, "paypal": False, "manual": True}
+            ).inline_keyboard
+            for button in row
+        ]
+
+        self.assertEqual(
+            buttons,
+            [
+                ("✅ Ko-fi", "admin_payment_toggle:kofi"),
+                ("⭕ PayPal", "admin_payment_toggle:paypal"),
+                ("✅ Перевод на карту", "admin_payment_toggle:manual"),
+                ("◀️ К тарифам", "admin_tariffs"),
+            ],
+        )
 
 
-class FakeManualPaymentMessage:
+class FakeManualPaymentMessage(Message):
     def __init__(self):
-        self.edited_text = None
-        self.reply_markup = None
+        super().__init__(
+            message_id=1,
+            date=datetime.now(),
+            chat=Chat(id=123, type="private"),
+        )
+        object.__setattr__(self, "edited_text", None)
+        object.__setattr__(self, "reply_markup", None)
+        object.__setattr__(self, "parse_mode", None)
 
     async def edit_text(self, text, reply_markup=None, parse_mode=None):
-        self.edited_text = text
-        self.reply_markup = reply_markup
-        self.parse_mode = parse_mode
+        object.__setattr__(self, "edited_text", text)
+        object.__setattr__(self, "reply_markup", reply_markup)
+        object.__setattr__(self, "parse_mode", parse_mode)
 
 
 class FakeManualPaymentCallback:
     def __init__(self):
+        self.from_user = type("User", (), {"id": 123})()
         self.message = FakeManualPaymentMessage()
         self.answered = False
+        self.answer_text = None
+        self.answer_show_alert = None
 
-    async def answer(self, *args, **kwargs):
+    async def answer(self, text=None, show_alert=None, **kwargs):
         self.answered = True
+        self.answer_text = text
+        self.answer_show_alert = show_alert
+
+
+class FakePaymentMethodsRepo:
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+
+    async def is_payment_method_enabled(self, method):
+        return self.enabled
 
 
 class BillingManualPaymentTest(unittest.IsolatedAsyncioTestCase):
     async def test_manual_card_payment_button_opens_details(self):
         callback = FakeManualPaymentCallback()
 
-        await cb_billing_manual(callback)
+        await cb_billing_manual(callback, FakePaymentMethodsRepo())
 
         self.assertTrue(callback.answered)
         self.assertIn("Прямой перевод на карту", callback.message.edited_text)
@@ -227,6 +309,16 @@ class BillingManualPaymentTest(unittest.IsolatedAsyncioTestCase):
             for button in row
         ]
         self.assertIn("💬 Написать администратору", buttons)
+
+    async def test_manual_card_payment_button_respects_admin_visibility(self):
+        callback = FakeManualPaymentCallback()
+
+        await cb_billing_manual(callback, FakePaymentMethodsRepo(enabled=False))
+
+        self.assertTrue(callback.answered)
+        self.assertEqual(callback.answer_text, "Перевод на карту сейчас недоступен.")
+        self.assertTrue(callback.answer_show_alert)
+        self.assertIsNone(callback.message.edited_text)
 
 
 if __name__ == "__main__":

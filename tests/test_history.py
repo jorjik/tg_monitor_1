@@ -6,10 +6,12 @@ import unittest
 from bot.handlers.history import _result_summary
 from bot.keyboards import history_interval_kb, history_result_kb, main_menu_kb
 from db.repository import Repository
+from telethon.tl.types import InputPeerChannel, PeerChannel, PeerChat
 from userbot.history import (
     HISTORY_TIMEZONE,
     HistoryScanner,
     find_matches,
+    history_entity_ref,
     message_url,
     parse_history_interval,
 )
@@ -83,6 +85,34 @@ class HistoryHelpersTest(unittest.TestCase):
             message_url(1234567890, None, 55),
             "https://t.me/c/1234567890/55",
         )
+
+    def test_builds_channel_peer_for_username_less_history_chat(self):
+        entity = history_entity_ref(
+            {"tg_id": 1614355055, "username": None, "chat_type": "supergroup"}
+        )
+
+        self.assertIsInstance(entity, PeerChannel)
+        self.assertEqual(entity.channel_id, 1614355055)
+
+    def test_builds_input_peer_for_username_less_chat_with_access_hash(self):
+        entity = history_entity_ref(
+            {
+                "tg_id": 1614355055,
+                "username": None,
+                "access_hash": "123456789",
+                "chat_type": "supergroup",
+            }
+        )
+
+        self.assertIsInstance(entity, InputPeerChannel)
+        self.assertEqual(entity.channel_id, 1614355055)
+        self.assertEqual(entity.access_hash, 123456789)
+
+    def test_builds_group_peer_for_username_less_basic_group(self):
+        entity = history_entity_ref({"tg_id": -12345, "username": None, "chat_type": "group"})
+
+        self.assertIsInstance(entity, PeerChat)
+        self.assertEqual(entity.chat_id, 12345)
 
 
 class FakeSender:
@@ -254,6 +284,55 @@ class HistoryRepositoryTest(unittest.IsolatedAsyncioTestCase):
             await repo.toggle_chat(user_id, chat["id"])
 
             self.assertEqual(await repo.get_history_chats(user_id), [])
+
+    async def test_saves_chat_access_hash_for_history_entity_resolution(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Repository(str(Path(td) / "db.sqlite"))
+            await repo.init_db()
+            user_id = 123
+            topic_id = await repo.create_topic(user_id, "бизнес", "бизнес")
+
+            await repo.save_chat(
+                topic_id,
+                1614355055,
+                None,
+                "Работа не волк | вакансии",
+                "supergroup",
+                10,
+                access_hash=123456789,
+            )
+
+            chat = (await repo.get_history_chats(user_id))[0]
+            self.assertEqual(chat["access_hash"], "123456789")
+
+    async def test_save_chat_can_clear_stale_username_without_losing_access_hash(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Repository(str(Path(td) / "db.sqlite"))
+            await repo.init_db()
+            user_id = 123
+            topic_id = await repo.create_topic(user_id, "бизнес", "бизнес")
+            await repo.save_chat(
+                topic_id,
+                1614355055,
+                "oldname",
+                "Работа не волк | вакансии",
+                "supergroup",
+                10,
+                access_hash=123456789,
+            )
+
+            await repo.save_chat(
+                topic_id,
+                1614355055,
+                None,
+                "Работа не волк | вакансии",
+                "supergroup",
+                10,
+            )
+
+            chat = (await repo.get_history_chats(user_id))[0]
+            self.assertIsNone(chat["username"])
+            self.assertEqual(chat["access_hash"], "123456789")
 
 
 if __name__ == "__main__":

@@ -42,10 +42,11 @@ async def require_message_access(message: Message, repo: Repository) -> bool:
     if await user_has_access(repo, user_tg_id):
         return True
     tariffs = await repo.get_tariffs(active_only=True)
+    payment_methods = await repo.get_payment_methods()
     await message.answer(
         "🔒 Доступ к этому разделу доступен после оплаты или во время демо-доступа.\n\n"
         "Откройте подписку и выберите тариф.",
-        reply_markup=subscription_kb(tariffs),
+        reply_markup=subscription_kb(tariffs, payment_methods),
     )
     return False
 
@@ -58,9 +59,10 @@ async def require_paid_message_access(message: Message, repo: Repository) -> boo
     if await user_has_paid_access(repo, user_tg_id):
         return True
     tariffs = await repo.get_tariffs(active_only=True)
+    payment_methods = await repo.get_payment_methods()
     await message.answer(
         "💎 Загрузка файла со списком чатов доступна только на платном тарифе.",
-        reply_markup=subscription_kb(tariffs),
+        reply_markup=subscription_kb(tariffs, payment_methods),
     )
     return False
 
@@ -72,10 +74,11 @@ async def require_callback_access(callback: CallbackQuery, repo: Repository) -> 
         return True
     await callback.answer("Нужна активная подписка.", show_alert=True)
     tariffs = await repo.get_tariffs(active_only=True)
+    payment_methods = await repo.get_payment_methods()
     if isinstance(callback.message, Message):
         await callback.message.answer(
             "🔒 Доступ к этому действию доступен после оплаты или во время демо-доступа.",
-            reply_markup=subscription_kb(tariffs),
+            reply_markup=subscription_kb(tariffs, payment_methods),
         )
     return False
 
@@ -87,9 +90,10 @@ async def require_paid_callback_access(callback: CallbackQuery, repo: Repository
         return True
     await callback.answer("Загрузка файла доступна только на платном тарифе.", show_alert=True)
     tariffs = await repo.get_tariffs(active_only=True)
+    payment_methods = await repo.get_payment_methods()
     if isinstance(callback.message, Message):
         await callback.message.answer(
             "💎 Загрузка файла со списком чатов доступна только на платном тарифе.",
-            reply_markup=subscription_kb(tariffs),
+            reply_markup=subscription_kb(tariffs, payment_methods),
         )
     return False

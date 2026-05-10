@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 BILLING_TRIAL_DAYS_KEY = "billing_trial_days"
 DEFAULT_TRIAL_DAYS = 7
 GEO_FILTER_DEFAULT_MIGRATED_KEY = "geo_filter_empty_default_migrated"
+PAYMENT_METHODS = ("kofi", "paypal", "manual")
+PAYMENT_METHOD_SETTING_PREFIX = "payment_method_enabled_"
+KNOWN_SCHEMA_TABLES = frozenset({"chats", "topics", "keywords", "feed", "payments"})
 
 
 def _utc_now() -> datetime:
@@ -47,6 +50,7 @@ CREATE TABLE IF NOT EXISTS chats (
     topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,
     tg_id INTEGER NOT NULL,
     username TEXT,
+    access_hash TEXT,
     title TEXT NOT NULL,
     chat_type TEXT NOT NULL,
     members_count INTEGER DEFAULT 0,
@@ -187,6 +191,7 @@ class Repository:
                 pass
                 
             await self._migrate_topics(db)
+            await self._migrate_chats(db)
             await self._migrate_keywords(db)
             await self._migrate_feed(db)
             await self._migrate_settings(db)
@@ -210,6 +215,11 @@ class Repository:
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
             (BILLING_TRIAL_DAYS_KEY, str(DEFAULT_TRIAL_DAYS)),
         )
+        for method in PAYMENT_METHODS:
+            await db.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+                (f"{PAYMENT_METHOD_SETTING_PREFIX}{method}", "1"),
+            )
         cur = await db.execute("SELECT COUNT(*) FROM tariffs")
         row = await cur.fetchone()
         if row and row[0] == 0:
@@ -226,6 +236,8 @@ class Repository:
             )
 
     async def _columns(self, db, table: str) -> set[str]:
+        if table not in KNOWN_SCHEMA_TABLES:
+            raise ValueError(f"Unknown schema table: {table}")
         cur = await db.execute(f"PRAGMA table_info({table})")
         return {row[1] for row in await cur.fetchall()}
 
@@ -275,6 +287,12 @@ class Repository:
         )
         await db.execute("DROP TABLE topics")
         await db.execute("ALTER TABLE topics_new RENAME TO topics")
+
+    async def _migrate_chats(self, db) -> None:
+        chat_columns = await self._columns(db, "chats")
+        if "access_hash" not in chat_columns:
+            await db.execute("ALTER TABLE chats ADD COLUMN access_hash TEXT")
+            await db.commit()
 
     async def _migrate_keywords(self, db) -> None:
         if "user_tg_id" in await self._columns(db, "keywords"):
@@ -518,13 +536,29 @@ class Repository:
         title: str,
         chat_type: str,
         members_count: int = 0,
+        access_hash: Optional[int | str] = None,
     ) -> None:
+        access_hash_value = str(access_hash) if access_hash is not None else None
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT OR IGNORE INTO chats "
-                "(topic_id, tg_id, username, title, chat_type, members_count) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (topic_id, tg_id, username, title, chat_type, members_count),
+                "INSERT INTO chats "
+                "(topic_id, tg_id, username, access_hash, title, chat_type, members_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(topic_id, tg_id) DO UPDATE SET "
+                "username = excluded.username, "
+                "access_hash = COALESCE(excluded.access_hash, chats.access_hash), "
+                "title = excluded.title, "
+                "chat_type = excluded.chat_type, "
+                "members_count = excluded.members_count",
+                (
+                    topic_id,
+                    tg_id,
+                    username,
+                    access_hash_value,
+                    title,
+                    chat_type,
+                    members_count,
+                ),
             )
             await db.commit()
 
@@ -567,7 +601,9 @@ class Repository:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT c.*, t.id as topic_id, t.name as topic_name FROM chats c "
+                "SELECT c.id, c.topic_id, c.tg_id, c.username, c.access_hash, c.title, "
+                "c.chat_type, c.members_count, c.is_active, c.added_at, "
+                "t.name as topic_name FROM chats c "
                 "JOIN topics t ON t.id = c.topic_id "
                 "WHERE c.is_active = 1 AND t.user_tg_id = ? "
                 "ORDER BY t.name, c.title",
@@ -1255,6 +1291,34 @@ class Repository:
             if subscription:
                 return subscription["expires_at"], False
             return None, False
+
+    async def get_payment_methods(self) -> dict[str, bool]:
+        keys = [f"{PAYMENT_METHOD_SETTING_PREFIX}{method}" for method in PAYMENT_METHODS]
+        placeholders = ",".join("?" for _ in keys)
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                f"SELECT key, value FROM settings WHERE key IN ({placeholders})",
+                keys,
+            )
+            values = dict(await cur.fetchall())
+        return {
+            method: values.get(f"{PAYMENT_METHOD_SETTING_PREFIX}{method}", "1") == "1"
+            for method in PAYMENT_METHODS
+        }
+
+    async def is_payment_method_enabled(self, method: str) -> bool:
+        if method not in PAYMENT_METHODS:
+            raise ValueError("Unknown payment method")
+        methods = await self.get_payment_methods()
+        return methods[method]
+
+    async def set_payment_method_enabled(self, method: str, enabled: bool) -> None:
+        if method not in PAYMENT_METHODS:
+            raise ValueError("Unknown payment method")
+        await self.set_setting(
+            f"{PAYMENT_METHOD_SETTING_PREFIX}{method}",
+            "1" if enabled else "0",
+        )
 
     async def get_setting(
         self, key: str, default: str = "", user_tg_id: Optional[int] = None
