@@ -493,3 +493,27 @@ async def process_trial_days(message: Message, state: FSMContext, repo: Reposito
     await state.clear()
     await message.answer(f"✅ Демо-доступ для новых пользователей: {days} дней.")
     await _show_admin_tariffs(message, repo)
+
+
+@router.callback_query(F.data == "billing_manual")
+async def cb_billing_manual(callback: CallbackQuery):
+    text = (
+        "💳 <b>Прямой перевод на карту</b>\n\n"
+        "Вы можете оплатить подписку напрямую. "
+        "После оплаты обязательно пришлите <b>скриншот чека</b> администратору "
+        "<a href='https://t.me/potok2023'>@potok2023</a>.\n\n"
+        "<b>Реквизиты:</b>\n\n"
+        "🇺🇦 MonoBank (UAH): <b>220 грн</b>\n"
+        "<code>4441111062731694</code>\n\n"
+        "💵 MonoBank (USD): <b>5$</b>\n"
+        "<code>4441111088169200</code>\n\n"
+        "👤 Получатель: <b>Грибков Е.Г.</b>\n\n"
+        "⚠️ <i>Нажмите на номер карты выше, чтобы скопировать его.</i>\n\n"
+        "После перевода напишите администратору для активации доступа."
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=manual_payment_kb(),
+        parse_mode="HTML"
+    )
+    await callback.answer()

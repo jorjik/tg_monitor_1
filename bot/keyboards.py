@@ -235,6 +235,7 @@ def subscription_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
             text=f"💳 PayPal: {tariff['name']} — {tariff['duration_days']} дн.",
             callback_data=f"billing_paypal:{tariff['id']}",
         )
+    b.button(text="💳 Перевод на карту (UA/USD)", callback_data="billing_manual")
     b.button(text="🔙 Назад", callback_data="main_menu")
     b.adjust(1)
     return b.as_markup()
@@ -253,6 +254,14 @@ def paypal_payment_kb(approval_url: str, order_id: str) -> InlineKeyboardMarkup:
     b.button(text="💳 Оплатить через PayPal", url=approval_url)
     b.button(text="✅ Проверить статус", callback_data=f"paypal_check:{order_id}")
     b.button(text="◀️ К подписке", callback_data="billing_back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def manual_payment_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="💬 Написать администратору", url="https://t.me/potok2023")
+    b.button(text="◀️ Назад", callback_data="billing_back")
     b.adjust(1)
     return b.as_markup()
 
