@@ -120,20 +120,22 @@ class KofiRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
 
 class KofiKeyboardTest(unittest.TestCase):
-    def test_subscription_keyboard_can_include_kofi_buttons(self):
+    def test_subscription_keyboard_includes_kofi_button(self):
         tariffs = [{"id": 1, "name": "Месяц", "stars": 100, "duration_days": 30, "is_active": 1}]
 
         buttons = [
             button.text
-            for row in subscription_kb(tariffs, include_kofi=True).inline_keyboard
+            for row in subscription_kb(tariffs).inline_keyboard
             for button in row
         ]
 
         self.assertEqual(
             buttons,
             [
-                "⭐ Месяц — 100 Stars / 30 дн.",
-                "🌍 Ko-fi — Месяц / 30 дн.",
+                "🌍 Ko-fi: Месяц — 30 дн.",
+                "💳 PayPal: Месяц — 30 дн.",
+                "💳 Перевод на карту (UA/USD)",
+                "🔙 Назад",
             ],
         )
 

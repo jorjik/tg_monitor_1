@@ -13,6 +13,7 @@ from bot.keyboards import (
     admin_tariffs_kb,
     kofi_payment_kb,
     main_menu_kb,
+    manual_payment_kb,
     paypal_payment_kb,
     subscription_kb,
 )

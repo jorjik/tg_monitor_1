@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from bot.access import user_has_paid_access
+from bot.handlers.billing import cb_billing_manual
 from bot.keyboards import admin_tariffs_kb, main_menu_kb, subscription_kb
 from db import repository as repository_module
 from db.repository import Repository
@@ -161,7 +162,7 @@ class BillingKeyboardTest(unittest.TestCase):
     def test_locked_main_menu_only_shows_subscription_and_help(self):
         rows = [[button.text for button in row] for row in main_menu_kb(has_access=False).keyboard]
 
-        self.assertEqual(rows, [["💳 Подписка"], ["❓ Помощь"]])
+        self.assertEqual(rows, [["💳 Подписка"], ["🤝 Партнерка"], ["❓ Помощь"]])
 
     def test_accessible_main_menu_shows_history_for_regular_user(self):
         buttons = [button.text for row in main_menu_kb(is_admin=False, has_access=True).keyboard for button in row]
@@ -178,9 +179,54 @@ class BillingKeyboardTest(unittest.TestCase):
             button.text for row in admin_tariffs_kb(tariffs).inline_keyboard for button in row
         ]
 
-        self.assertEqual(subscription_buttons, ["⭐ Месяц — 100 Stars / 30 дн."])
+        self.assertEqual(
+            subscription_buttons,
+            [
+                "🌍 Ko-fi: Месяц — 30 дн.",
+                "💳 PayPal: Месяц — 30 дн.",
+                "💳 Перевод на карту (UA/USD)",
+                "🔙 Назад",
+            ],
+        )
         self.assertIn("✅ Месяц — 100⭐ / 30 дн.", admin_buttons)
         self.assertIn("➕ Новый тариф", admin_buttons)
+
+
+class FakeManualPaymentMessage:
+    def __init__(self):
+        self.edited_text = None
+        self.reply_markup = None
+
+    async def edit_text(self, text, reply_markup=None, parse_mode=None):
+        self.edited_text = text
+        self.reply_markup = reply_markup
+        self.parse_mode = parse_mode
+
+
+class FakeManualPaymentCallback:
+    def __init__(self):
+        self.message = FakeManualPaymentMessage()
+        self.answered = False
+
+    async def answer(self, *args, **kwargs):
+        self.answered = True
+
+
+class BillingManualPaymentTest(unittest.IsolatedAsyncioTestCase):
+    async def test_manual_card_payment_button_opens_details(self):
+        callback = FakeManualPaymentCallback()
+
+        await cb_billing_manual(callback)
+
+        self.assertTrue(callback.answered)
+        self.assertIn("Прямой перевод на карту", callback.message.edited_text)
+        self.assertEqual(callback.message.parse_mode, "HTML")
+        buttons = [
+            button.text
+            for row in callback.message.reply_markup.inline_keyboard
+            for button in row
+        ]
+        self.assertIn("💬 Написать администратору", buttons)
 
 
 if __name__ == "__main__":
