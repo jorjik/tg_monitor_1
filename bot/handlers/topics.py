@@ -60,7 +60,7 @@ def _split_search_terms(value: str) -> list[str]:
 def _collection_terms(topic: dict) -> tuple[list[str], str]:
     terms = _split_search_terms(topic.get("search_terms") or "")
     if terms:
-        return terms, "поисковые слова"
+        return terms, "доп. слова темы"
     name = (topic.get("name") or "").strip()
     return ([name] if name else []), "название темы"
 
@@ -156,13 +156,13 @@ async def cb_topic_detail(callback: CallbackQuery, repo: Repository, state: FSMC
     chats = await repo.get_chats(user_tg_id, topic_id)
     active = sum(1 for c in chats if c["is_active"])
     terms, terms_source = _collection_terms(topic)
-    if terms_source == "поисковые слова":
+    if terms_source == "доп. слова темы":
         search_text = _terms_preview(terms, limit=8)
     else:
         search_text = f"не заданы, сбор по названию темы «{topic['name']}»"
     text = (
         f"📂 <b>Тема: {html.escape(topic['name'])}</b>\n\n"
-        f"🔍 Поисковые слова: {html.escape(search_text)}\n"
+        f"🔍 Доп. слова темы: {html.escape(search_text)}\n"
         f"💬 Чатов: {len(chats)} (активных: {active})"
     )
     await callback.message.edit_text(
@@ -204,7 +204,7 @@ async def process_topic_name(message: Message, state: FSMContext, repo: Reposito
     await state.set_state(TopicForm.waiting_search_terms)
     await message.answer(
         f"✅ Название: <b>{html.escape(name)}</b>\n\n"
-        "Введите <b>поисковые слова</b> через запятую.\n"
+        "Введите <b>доп. слова темы</b> через запятую.\n"
         "Напр: <code>стартап, инвестиции, франшиза</code>\n\n"
         "Или нажмите <b>⏭ Пропустить</b> — тогда первый сбор попробует искать по названию темы.",
         reply_markup=skip_topic_terms_kb(),
@@ -233,7 +233,7 @@ async def process_search_terms(message: Message, state: FSMContext, repo: Reposi
     await state.clear()
     await message.answer(
         f"✅ <b>Тема «{html.escape(data['topic_name'])}» создана!</b>\n\n"
-        f"Поисковые слова: {html.escape(terms)}\n"
+        f"Доп. слова темы: {html.escape(terms)}\n"
         f"Ключевых слов добавлено: {added_keywords}\n\n"
         "Нажмите <b>🔍 Собрать чаты</b> для первого прохода.",
         reply_markup=topic_detail_kb(topic_id),
@@ -294,7 +294,7 @@ async def cb_collect(
         return
     terms, terms_source = _collection_terms(topic)
     if not terms:
-        await callback.answer("Нет поисковых слов для сбора", show_alert=True)
+        await callback.answer("Нет доп. слов темы для сбора", show_alert=True)
         return
     terms_text = html.escape(_terms_preview(terms))
     msg = await callback.message.edit_text(
