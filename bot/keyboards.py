@@ -206,7 +206,7 @@ def monitor_kb(is_running: bool, cooldown_minutes: int = 0) -> InlineKeyboardMar
     if cooldown_minutes:
         b.button(text="🔔 Уведомлять сразу", callback_data="monitor:cooldown:0")
     else:
-        b.button(text="🔕 Не чаще 10 мин", callback_data="monitor:cooldown:10")
+        b.button(text="🔕 Не чаще раз в 10 мин", callback_data="monitor:cooldown:10")
     b.adjust(1)
     return b.as_markup()
 

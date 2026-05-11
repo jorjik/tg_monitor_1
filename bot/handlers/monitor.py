@@ -54,7 +54,7 @@ async def _status(repo: Repository, watcher: MessageWatcher, user_tg_id: int) ->
     unread = await repo.get_unread_count(user_tg_id)
     cooldown = await repo.get_notification_cooldown_minutes(user_tg_id)
     icon = "🟢 Активен" if watcher.is_running else "🔴 Остановлен"
-    cooldown_text = "сразу" if cooldown <= 0 else f"не чаще {cooldown} мин"
+    cooldown_text = "сразу" if cooldown <= 0 else f"не чаще раз в {cooldown} мин"
     return (
         f"⚙️ <b>Мониторинг</b>\n\n"
         f"Статус сервиса: {icon}\n"
