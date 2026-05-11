@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from bot.access import user_has_paid_access
+import bot.kofi_webhook as kofi_webhook
 from bot.kofi import (
     extract_kofi_code,
     kofi_amount_for_tariff,
@@ -117,6 +118,36 @@ class KofiRepositoryTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["status"], "manual_review")
             self.assertEqual(result["reason"], "amount_or_currency_mismatch")
             self.assertFalse(await user_has_paid_access(repo, 123))
+
+
+class FakeBot:
+    def __init__(self):
+        self.messages = []
+
+    async def send_message(self, chat_id, text, parse_mode=None):
+        self.messages.append(
+            {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        )
+
+
+class KofiWebhookNotificationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_admin_manual_review_notification_escapes_html(self):
+        previous_admin = kofi_webhook.ADMIN_USER_ID
+        kofi_webhook.ADMIN_USER_ID = 999
+        try:
+            bot = FakeBot()
+
+            await kofi_webhook._notify_admin(
+                bot,
+                "msg</code><b>bad</b>",
+                {"reason": "code_<missing>"},
+            )
+
+            text = bot.messages[0]["text"]
+            self.assertIn("msg&lt;/code&gt;&lt;b&gt;bad&lt;/b&gt;", text)
+            self.assertIn("code_&lt;missing&gt;", text)
+        finally:
+            kofi_webhook.ADMIN_USER_ID = previous_admin
 
 
 class KofiKeyboardTest(unittest.TestCase):

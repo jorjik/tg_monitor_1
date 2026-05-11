@@ -200,9 +200,13 @@ def geo_filter_kb(words: list[str]) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def monitor_kb(is_running: bool) -> InlineKeyboardMarkup:
+def monitor_kb(is_running: bool, cooldown_minutes: int = 0) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="🔄 Обновить статус", callback_data="monitor:status")
+    if cooldown_minutes:
+        b.button(text="🔔 Уведомлять сразу", callback_data="monitor:cooldown:0")
+    else:
+        b.button(text="🔕 Не чаще 10 мин", callback_data="monitor:cooldown:10")
     b.adjust(1)
     return b.as_markup()
 
@@ -289,6 +293,7 @@ def admin_tariffs_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
     b.button(text="➕ Новый тариф", callback_data="admin_tariff:new")
     b.button(text="🎁 Демо-доступ", callback_data="admin_trial_days")
     b.button(text="💳 Способы оплаты", callback_data="admin_payment_methods")
+    b.button(text="⚠️ Проверка оплат", callback_data="admin_payment_reviews")
     b.adjust(1)
     return b.as_markup()
 
@@ -317,7 +322,11 @@ def admin_users_kb() -> InlineKeyboardMarkup:
 
 
 def admin_users_list_kb(
-    users: list[dict], page: int, total: int, page_size: int = 10
+    users: list[dict],
+    page: int,
+    total: int,
+    page_size: int = 10,
+    status_filter: str = "all",
 ) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for user in users:
@@ -327,13 +336,58 @@ def admin_users_list_kb(
     b.adjust(1)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_users_list:{page - 1}"))
+        nav.append(
+            InlineKeyboardButton(
+                text="◀️", callback_data=f"admin_users_list:{page - 1}:{status_filter}"
+            )
+        )
     if (page + 1) * page_size < total:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_users_list:{page + 1}"))
+        nav.append(
+            InlineKeyboardButton(
+                text="▶️", callback_data=f"admin_users_list:{page + 1}:{status_filter}"
+            )
+        )
     if nav:
         b.row(*nav)
+    b.row(
+        InlineKeyboardButton(text="Все", callback_data="admin_users_list:0:all"),
+        InlineKeyboardButton(text="Активные", callback_data="admin_users_list:0:active"),
+    )
+    b.row(
+        InlineKeyboardButton(text="Платные", callback_data="admin_users_list:0:paid"),
+        InlineKeyboardButton(text="Демо", callback_data="admin_users_list:0:trial"),
+    )
+    b.row(
+        InlineKeyboardButton(text="Без оплаты", callback_data="admin_users_list:0:none"),
+        InlineKeyboardButton(text="Отключены", callback_data="admin_users_list:0:inactive"),
+    )
     b.row(InlineKeyboardButton(text="🔍 Поиск", callback_data="admin_users_search"))
     b.row(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_users"))
+    return b.as_markup()
+
+
+def admin_payment_reviews_kb(payments: list[dict]) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for payment in payments:
+        provider_id = str(payment.get("provider_payment_id") or payment["id"])
+        reason = str(payment.get("reason") or "manual_review")
+        b.button(
+            text=f"⚠️ {provider_id} — {reason}"[:64],
+            callback_data=f"admin_kofi_review:{payment['id']}",
+        )
+    b.button(text="🔄 Обновить", callback_data="admin_payment_reviews")
+    b.button(text="◀️ К тарифам", callback_data="admin_tariffs")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def admin_payment_review_detail_kb(payment_id: int, can_approve: bool) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    if can_approve:
+        b.button(text="✅ Засчитать", callback_data=f"admin_kofi_review_action:{payment_id}:approve")
+    b.button(text="❌ Отклонить", callback_data=f"admin_kofi_review_action:{payment_id}:reject")
+    b.button(text="◀️ К проверке оплат", callback_data="admin_payment_reviews")
+    b.adjust(1)
     return b.as_markup()
 
 

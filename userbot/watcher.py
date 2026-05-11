@@ -111,6 +111,9 @@ class MessageWatcher:
                 )
                 if not saved:
                     continue
+                if not await self.repo.should_send_notification(recipient_id):
+                    logger.info("Уведомление пользователю %s отложено cooldown", recipient_id)
+                    continue
 
                 kw_str = ", ".join(f"\u00ab{html.escape(k)}\u00bb" for k in matched)
                 notification = "\n".join([
@@ -126,6 +129,7 @@ class MessageWatcher:
                 ])
                 try:
                     await self._send_notification(recipient_id, notification)
+                    await self.repo.mark_notification_sent(recipient_id)
                 except TelegramForbiddenError:
                     await self.repo.deactivate_bot_user(recipient_id)
                     logger.warning(f"Пользователь {recipient_id} заблокировал бота")

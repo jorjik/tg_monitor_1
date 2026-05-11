@@ -1,10 +1,13 @@
+import csv
 import html
+from io import StringIO
 import logging
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.types import BufferedInputFile
 from aiogram.types import CallbackQuery, Message
 
 from bot.access import require_callback_access, require_message_access
@@ -81,6 +84,36 @@ def _result_summary(
     return "\n".join(lines)
 
 
+def _history_matches_csv(matches: list[tuple[dict, object]]) -> str:
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "chat_title",
+            "date",
+            "sender_name",
+            "matched_keywords",
+            "url",
+            "saved",
+            "text",
+        ],
+    )
+    writer.writeheader()
+    for chat, item in matches:
+        writer.writerow(
+            {
+                "chat_title": chat.get("title", ""),
+                "date": item.date.isoformat(),
+                "sender_name": item.sender_name,
+                "matched_keywords": ", ".join(item.matched_keywords),
+                "url": item.url,
+                "saved": "1" if item.saved else "0",
+                "text": " ".join(item.text.split()),
+            }
+        )
+    return output.getvalue()
+
+
 @router.message(F.text == "🕘 История")
 @router.message(Command("history"))
 async def cmd_history(message: Message, state: FSMContext, repo: Repository):
@@ -151,6 +184,7 @@ async def process_history_interval(
     }
     all_keywords: set[str] = set()
     previews: list[tuple[dict, object]] = []
+    export_matches: list[tuple[dict, object]] = []
 
     for index, chat in enumerate(chats, start=1):
         try:
@@ -161,8 +195,10 @@ async def process_history_interval(
                 f"Уже найдено: {totals['matched']} | добавлено: {totals['saved']}",
                 parse_mode="HTML",
             )
-        except Exception:
+        except TelegramBadRequest:
             pass
+        except Exception:
+            logger.debug("Failed to update history progress message", exc_info=True)
         try:
             result = await scanner.scan(user_tg_id, chat["topic_id"], chat, start, end)
         except Exception as e:
@@ -192,6 +228,7 @@ async def process_history_interval(
         for item in result.preview:
             if len(previews) < HISTORY_PREVIEW_LIMIT:
                 previews.append((chat, item))
+        export_matches.extend((chat, item) for item in result.matches)
 
     totals["keywords"] = len(all_keywords)
     await status.edit_text(
@@ -200,6 +237,20 @@ async def process_history_interval(
         disable_web_page_preview=True,
         reply_markup=history_result_kb(),
     )
+    if export_matches:
+        csv_text = _history_matches_csv(export_matches)
+        await _callback_answer_message(
+            callback,
+            "📄 CSV с найденными совпадениями:",
+            parse_mode="HTML",
+        )
+        document = BufferedInputFile(
+            csv_text.encode("utf-8-sig"), filename="history_matches.csv"
+        )
+        if isinstance(callback.message, Message):
+            await callback.message.answer_document(document)
+        else:
+            await callback.bot.send_document(callback.from_user.id, document)
 
 
 @router.message(HistoryForm.waiting_interval)

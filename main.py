@@ -1,5 +1,7 @@
 import asyncio
+from datetime import datetime, timezone
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import sys
 
@@ -24,12 +26,14 @@ from bot.handlers import (
     topics,
 )
 from bot.kofi_webhook import start_kofi_webhook
+from bot.paypal import PayPalClient
 from core.config import (
     API_HASH,
     API_ID,
     BOT_TOKEN,
     DB_PATH,
     PHONE,
+    SESSION_MODE,
     SESSION_PATH,
     SESSION_STRING,
 )
@@ -42,19 +46,37 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("data/monitor.log", encoding="utf-8"),
+        RotatingFileHandler(
+            "data/monitor.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8"
+        ),
     ],
 )
 logger = logging.getLogger(__name__)
 
 
+def _effective_session_mode(session_mode: str, session_string: str) -> str:
+    mode = (session_mode or "auto").strip().lower()
+    if mode == "auto":
+        return "string" if session_string else "file"
+    if mode not in {"string", "file"}:
+        raise ValueError("SESSION_MODE должен быть auto, string или file")
+    return mode
+
+
 def _check_config() -> None:
+    try:
+        session_mode = _effective_session_mode(SESSION_MODE, SESSION_STRING)
+    except ValueError as e:
+        logger.error(str(e))
+        sys.exit(1)
     required = {
         "API_ID": API_ID,
         "API_HASH": API_HASH,
         "BOT_TOKEN": BOT_TOKEN,
     }
-    if not SESSION_STRING:
+    if session_mode == "string":
+        required["SESSION_STRING"] = SESSION_STRING
+    else:
         required["PHONE"] = PHONE
     missing = [k for k, v in required.items() if not v]
     if missing:
@@ -64,7 +86,8 @@ def _check_config() -> None:
 
 
 async def _start_userbot() -> TelegramClient:
-    if SESSION_STRING:
+    session_mode = _effective_session_mode(SESSION_MODE, SESSION_STRING)
+    if session_mode == "string":
         client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
         await client.connect()
         if not await client.is_user_authorized():
@@ -101,6 +124,8 @@ async def main() -> None:
     dp["repo"] = repo
     dp["collector"] = collector
     dp["watcher"] = watcher
+    dp["paypal"] = PayPalClient()
+    dp["started_at"] = datetime.now(timezone.utc)
 
     dp.include_router(admin_users.router)
     dp.include_router(common.router)

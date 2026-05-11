@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 from typing import Optional
@@ -76,8 +77,8 @@ async def _notify_admin(bot: Bot, provider_payment_id: str, result: dict) -> Non
         await bot.send_message(
             ADMIN_USER_ID,
             "⚠️ Ko-fi платёж требует ручной проверки.\n\n"
-            f"ID: <code>{provider_payment_id}</code>\n"
-            f"Причина: <code>{result['reason']}</code>",
+            f"ID: <code>{html.escape(provider_payment_id)}</code>\n"
+            f"Причина: <code>{html.escape(result['reason'] or '')}</code>",
             parse_mode="HTML",
         )
     except Exception:

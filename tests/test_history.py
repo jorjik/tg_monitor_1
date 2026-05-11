@@ -1,9 +1,10 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
 
-from bot.handlers.history import _result_summary
+from bot.handlers.history import _history_matches_csv, _result_summary
 from bot.keyboards import history_interval_kb, history_result_kb, main_menu_kb
 from db.repository import Repository
 from telethon.tl.types import InputPeerChannel, PeerChannel, PeerChat
@@ -178,6 +179,7 @@ class HistoryScannerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.matched, 1)
         self.assertEqual(result.saved, 1)
         self.assertEqual(result.preview[0].url, "https://t.me/chatname/3")
+        self.assertEqual(result.matches[0].url, "https://t.me/chatname/3")
         self.assertEqual(repo.saved[0]["matched_keywords"], ["надо сайт"])
         self.assertEqual(client.calls[0], ("chatname", end, 10))
 
@@ -245,6 +247,30 @@ class HistorySummaryTest(unittest.TestCase):
         self.assertIn("Пропущено без ключевых слов: 1", text)
         self.assertIn("Уже были в ленте: 1", text)
         self.assertIn("Чатов с ошибкой: 1", text)
+
+    def test_history_matches_csv_exports_found_items(self):
+        start = datetime(2026, 5, 8, 10, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 5, 8, 12, 0, tzinfo=timezone.utc)
+        client = FakeClient(
+            [FakeMessage(3, datetime(2026, 5, 8, 11, 30, tzinfo=timezone.utc), "Надо сайт")]
+        )
+        repo = FakeRepo()
+
+        async def run():
+            return await HistoryScanner(client, repo).scan(
+                user_tg_id=123,
+                topic_id=5,
+                chat={"tg_id": 777, "username": "chatname", "title": "Чат"},
+                start=start,
+                end=end,
+                max_messages=10,
+            )
+
+        result = asyncio.run(run())
+        csv_text = _history_matches_csv([({"title": "Чат"}, item) for item in result.matches])
+
+        self.assertIn("chat_title", csv_text)
+        self.assertIn("https://t.me/chatname/3", csv_text)
 
 
 class HistoryRepositoryTest(unittest.IsolatedAsyncioTestCase):

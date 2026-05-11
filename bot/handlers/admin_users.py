@@ -59,11 +59,23 @@ async def _admin_users_dashboard_text(repo: Repository) -> str:
     )
 
 
+USER_FILTER_LABELS = {
+    "all": "все",
+    "active": "активные",
+    "inactive": "отключены",
+    "paid": "платные",
+    "trial": "демо",
+    "none": "без оплаты",
+}
+
+
 async def _admin_users_list_text(
-    repo: Repository, page: int, page_size: int = 10
+    repo: Repository, page: int, page_size: int = 10, status_filter: str = "all"
 ) -> tuple[str, list[dict], int]:
-    total = await repo.count_bot_users()
-    users = await repo.list_bot_users(limit=page_size, offset=page * page_size)
+    total = await repo.count_bot_users(status_filter=status_filter)
+    users = await repo.list_bot_users(
+        limit=page_size, offset=page * page_size, status_filter=status_filter
+    )
     pages = max(1, (total + page_size - 1) // page_size)
     if users:
         rows = "\n".join(
@@ -75,6 +87,7 @@ async def _admin_users_list_text(
     text = (
         "👥 <b>Список пользователей</b>\n\n"
         f"Всего пользователей: <b>{total}</b>\n"
+        f"Фильтр: <b>{html.escape(USER_FILTER_LABELS.get(status_filter, status_filter))}</b>\n"
         f"Страница: <b>{page + 1}/{pages}</b>\n\n"
         f"{rows}"
     )
@@ -103,11 +116,15 @@ async def cb_admin_users_search(callback: CallbackQuery, state: FSMContext):
 async def cb_admin_users_list(callback: CallbackQuery, repo: Repository):
     if not is_admin(callback.from_user.id):
         return
-    page = int(callback.data.split(":")[1])
-    text, users, total = await _admin_users_list_text(repo, page)
+    parts = callback.data.split(":")
+    page = int(parts[1])
+    status_filter = parts[2] if len(parts) > 2 else "all"
+    text, users, total = await _admin_users_list_text(repo, page, status_filter=status_filter)
     await callback.message.edit_text(
         text,
-        reply_markup=admin_users_list_kb(users, page, total),
+        reply_markup=admin_users_list_kb(
+            users, page, total, status_filter=status_filter
+        ),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -150,7 +167,9 @@ async def process_user_search(message: Message, state: FSMContext, repo: Reposit
         user = await repo.search_bot_user(query)
     
     if not user:
-        await message.answer(f"❌ Пользователь «{query}» не найден в базе данных бота.")
+        await message.answer(
+            f"❌ Пользователь «{html.escape(query)}» не найден в базе данных бота."
+        )
         return
 
     await state.clear()
@@ -193,12 +212,18 @@ async def cb_admin_user_add(callback: CallbackQuery, repo: Repository):
     await repo.add_subscription_days(user_tg_id, days)
     
     user = await repo.get_bot_user(user_tg_id)
+    if not user:
+        await callback.answer("Пользователь не найден.", show_alert=True)
+        return
+    text = (
+        f"✅ Пользователю начислено <b>{days} дней</b> подписки.\n\n"
+        f"{await _user_detail_text(repo, user)}"
+    )
     await callback.message.edit_text(
-        f"✅ Пользователю начислено <b>{days} дней</b> подписки.",
+        text,
+        reply_markup=admin_user_detail_kb(user["tg_id"]),
         parse_mode="HTML"
     )
-    # Re-show details
-    await _show_user_detail(callback.message, repo, user)
     await callback.answer("Подписка продлена")
 
 @router.callback_query(F.data.startswith("admin_user_add_custom:"))
@@ -223,20 +248,37 @@ async def process_custom_days(message: Message, state: FSMContext, repo: Reposit
         return
     
     data = await state.get_data()
-    user_tg_id = data["target_user_id"]
+    user_tg_id = data.get("target_user_id")
+    if not user_tg_id:
+        await state.clear()
+        await message.answer("Сессия начисления устарела. Откройте пользователя заново.")
+        return
     
     try:
         days = int(message.text)
     except ValueError:
         await message.answer("Введите целое число дней.")
         return
+    if days <= 0:
+        await message.answer("Введите положительное количество дней.")
+        return
     
     await repo.add_subscription_days(user_tg_id, days)
     await state.clear()
     
     user = await repo.get_bot_user(user_tg_id)
-    await message.answer(f"✅ Пользователю начислено <b>{days} дней</b> подписки.", parse_mode="HTML")
-    await _show_user_detail(message, repo, user)
+    if not user:
+        await message.answer("Пользователь не найден.")
+        return
+    text = (
+        f"✅ Пользователю начислено <b>{days} дней</b> подписки.\n\n"
+        f"{await _user_detail_text(repo, user)}"
+    )
+    await message.answer(
+        text,
+        reply_markup=admin_user_detail_kb(user["tg_id"]),
+        parse_mode="HTML",
+    )
 
 @router.callback_query(F.data == "admin_users")
 async def cb_admin_users(callback: CallbackQuery, state: FSMContext, repo: Repository):

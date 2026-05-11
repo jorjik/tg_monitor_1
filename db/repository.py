@@ -14,6 +14,8 @@ DEFAULT_TRIAL_DAYS = 7
 GEO_FILTER_DEFAULT_MIGRATED_KEY = "geo_filter_empty_default_migrated"
 PAYMENT_METHODS = ("kofi", "paypal", "manual")
 PAYMENT_METHOD_SETTING_PREFIX = "payment_method_enabled_"
+NOTIFICATION_COOLDOWN_KEY = "notification_cooldown_minutes"
+NOTIFICATION_LAST_SENT_KEY = "notification_last_sent_at"
 KNOWN_SCHEMA_TABLES = frozenset({"chats", "topics", "keywords", "feed", "payments"})
 
 
@@ -29,6 +31,10 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _payment_code() -> str:
@@ -182,14 +188,14 @@ class Repository:
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA foreign_keys = OFF")
             await db.executescript(CREATE_SCHEMA)
-            
+
             # Migration: referred_by
             try:
                 await db.execute("ALTER TABLE bot_users ADD COLUMN referred_by INTEGER REFERENCES bot_users(tg_id)")
                 await db.commit()
             except aiosqlite.OperationalError:
                 pass
-                
+
             await self._migrate_topics(db)
             await self._migrate_chats(db)
             await self._migrate_keywords(db)
@@ -238,6 +244,8 @@ class Repository:
     async def _columns(self, db, table: str) -> set[str]:
         if table not in KNOWN_SCHEMA_TABLES:
             raise ValueError(f"Unknown schema table: {table}")
+        # SQLite PRAGMA table names cannot be parameterized; the allowlist above
+        # keeps this f-string constrained to known internal table names.
         cur = await db.execute(f"PRAGMA table_info({table})")
         return {row[1] for row in await cur.fetchall()}
 
@@ -415,6 +423,8 @@ class Repository:
         return True
 
     async def add_subscription_days(self, user_tg_id: int, days: int) -> None:
+        if days <= 0:
+            return
         async with aiosqlite.connect(self.db_path) as db:
             now = _utc_now()
             # Ensure subscription record exists
@@ -424,7 +434,7 @@ class Repository:
             )
             await db.execute(
                 """
-                UPDATE user_subscriptions 
+                UPDATE user_subscriptions
                 SET expires_at = datetime(
                     CASE WHEN expires_at > CURRENT_TIMESTAMP THEN expires_at ELSE CURRENT_TIMESTAMP END,
                     '+' || ? || ' days'
@@ -458,26 +468,53 @@ class Repository:
                 row = await cur.fetchone()
                 return dict(row) if row else None
 
-    async def count_bot_users(self) -> int:
+    def _bot_user_filter_clause(self, status_filter: str = "all") -> tuple[str, tuple]:
+        filters = {
+            "all": ("", ()),
+            "active": ("WHERE bu.is_active = 1", ()),
+            "inactive": ("WHERE bu.is_active = 0", ()),
+            "paid": ("WHERE us.status = 'paid'", ()),
+            "trial": ("WHERE us.status = 'trial'", ()),
+            "none": ("WHERE us.status IS NULL", ()),
+        }
+        return filters.get(status_filter, filters["all"])
+
+    async def count_bot_users(self, status_filter: str = "all") -> int:
         async with aiosqlite.connect(self.db_path) as db:
-            cur = await db.execute("SELECT COUNT(*) FROM bot_users")
+            where, params = self._bot_user_filter_clause(status_filter)
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM bot_users bu "
+                "LEFT JOIN user_subscriptions us ON us.user_tg_id = bu.tg_id "
+                f"{where}",
+                params,
+            )
             row = await cur.fetchone()
             return row[0] if row else 0
 
-    async def list_bot_users(self, limit: int = 10, offset: int = 0) -> list[dict]:
+    async def count_active_bot_users(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM bot_users WHERE is_active = 1")
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    async def list_bot_users(
+        self, limit: int = 10, offset: int = 0, status_filter: str = "all"
+    ) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
+            where, params = self._bot_user_filter_clause(status_filter)
             cur = await db.execute(
-                """
+                f"""
                 SELECT bu.*,
                        COALESCE(us.status, 'none') AS subscription_status,
                        us.expires_at AS subscription_expires_at
                 FROM bot_users bu
                 LEFT JOIN user_subscriptions us ON us.user_tg_id = bu.tg_id
+                {where}
                 ORDER BY datetime(bu.updated_at) DESC, datetime(bu.created_at) DESC, bu.tg_id DESC
                 LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
+                (*params, limit, offset),
             )
             users = [dict(r) for r in await cur.fetchall()]
             for user in users:
@@ -485,18 +522,47 @@ class Repository:
                 user["subscription_is_active"] = bool(expires_at and expires_at > _utc_now())
             return users
 
+    async def count_chats(self, active_only: bool = False) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM chats WHERE (? = 0 OR is_active = 1)",
+                (1 if active_only else 0,),
+            )
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    async def count_keywords(self, active_only: bool = False) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM keywords WHERE (? = 0 OR is_active = 1)",
+                (1 if active_only else 0,),
+            )
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    async def count_feed_since(self, since: datetime) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "SELECT COUNT(*) FROM feed WHERE received_at >= ?",
+                (_format_ts(since),),
+            )
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
     async def search_bot_user(self, query: str) -> Optional[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            # Search by username or First/Last name
+            safe_query = _escape_like(query)
+            # Search by username or First/Last name; escape LIKE wildcards so
+            # operator searches for literal text rather than patterns.
             async with db.execute(
                 """
-                SELECT * FROM bot_users 
-                WHERE username LIKE ? 
-                OR (first_name || ' ' || last_name) LIKE ?
+                SELECT * FROM bot_users
+                WHERE username LIKE ? ESCAPE '\\'
+                OR (COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')) LIKE ? ESCAPE '\\'
                 LIMIT 1
                 """,
-                (f"%{query}%", f"%{query}%"),
+                (f"%{safe_query}%", f"%{safe_query}%"),
             ) as cur:
                 row = await cur.fetchone()
                 return dict(row) if row else None
@@ -903,6 +969,43 @@ class Repository:
             row = await cur.fetchone()
             return row[0] if row else 0
 
+    async def get_notification_cooldown_minutes(self, user_tg_id: int) -> int:
+        raw = await self.get_setting(
+            NOTIFICATION_COOLDOWN_KEY, "0", user_tg_id=user_tg_id
+        )
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 0
+
+    async def set_notification_cooldown_minutes(self, user_tg_id: int, minutes: int) -> None:
+        await self.set_setting(
+            NOTIFICATION_COOLDOWN_KEY, str(max(0, minutes)), user_tg_id=user_tg_id
+        )
+
+    async def should_send_notification(
+        self, user_tg_id: int, now: Optional[datetime] = None
+    ) -> bool:
+        cooldown = await self.get_notification_cooldown_minutes(user_tg_id)
+        if cooldown <= 0:
+            return True
+        current = (now or _utc_now()).astimezone(timezone.utc).replace(microsecond=0)
+        last_raw = await self.get_setting(
+            NOTIFICATION_LAST_SENT_KEY, "", user_tg_id=user_tg_id
+        )
+        last_sent = _parse_ts(last_raw)
+        if last_sent and current - last_sent < timedelta(minutes=cooldown):
+            return False
+        return True
+
+    async def mark_notification_sent(
+        self, user_tg_id: int, now: Optional[datetime] = None
+    ) -> None:
+        current = (now or _utc_now()).astimezone(timezone.utc).replace(microsecond=0)
+        await self.set_setting(
+            NOTIFICATION_LAST_SENT_KEY, _format_ts(current), user_tg_id=user_tg_id
+        )
+
     async def get_trial_days(self) -> int:
         raw = await self.get_setting(BILLING_TRIAL_DAYS_KEY, str(DEFAULT_TRIAL_DAYS))
         try:
@@ -1236,6 +1339,112 @@ class Repository:
             "tariff_id": payment.get("tariff_id"),
         }
 
+    async def list_kofi_manual_review_payments(self, limit: int = 10) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT kp.*, bu.username, bu.first_name, bu.last_name, t.name AS tariff_name "
+                "FROM kofi_payments kp "
+                "LEFT JOIN bot_users bu ON bu.tg_id = kp.user_tg_id "
+                "LEFT JOIN tariffs t ON t.id = kp.tariff_id "
+                "WHERE kp.status = 'manual_review' "
+                "ORDER BY datetime(kp.received_at) DESC LIMIT ?",
+                (limit,),
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def get_kofi_payment_review(self, payment_id: int) -> Optional[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT kp.*, bu.username, bu.first_name, bu.last_name, t.name AS tariff_name, "
+                "t.duration_days AS tariff_duration_days "
+                "FROM kofi_payments kp "
+                "LEFT JOIN bot_users bu ON bu.tg_id = kp.user_tg_id "
+                "LEFT JOIN tariffs t ON t.id = kp.tariff_id "
+                "WHERE kp.id = ?",
+                (payment_id,),
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def resolve_kofi_manual_review_payment(self, payment_id: int, action: str) -> dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM kofi_payments WHERE id = ?", (payment_id,))
+            payment = await cur.fetchone()
+            if not payment:
+                return {"status": "error", "reason": "not_found"}
+            if payment["status"] != "manual_review":
+                return {"status": "error", "reason": "not_manual_review"}
+            if action == "reject":
+                await db.execute(
+                    "UPDATE kofi_payments SET status = ?, reason = ? WHERE id = ?",
+                    ("rejected", "manual_rejected", payment_id),
+                )
+                await db.commit()
+                return {"status": "rejected", "user_tg_id": payment["user_tg_id"]}
+            if action != "approve":
+                return {"status": "error", "reason": "unknown_action"}
+            if not payment["user_tg_id"] or not payment["tariff_id"]:
+                return {"status": "error", "reason": "user_or_tariff_missing"}
+            tariff = await (
+                await db.execute("SELECT * FROM tariffs WHERE id = ?", (payment["tariff_id"],))
+            ).fetchone()
+            if not tariff:
+                return {"status": "error", "reason": "tariff_not_found"}
+            await db.execute(
+                "UPDATE kofi_payments SET status = ?, reason = NULL WHERE id = ?",
+                ("paid_manual", payment_id),
+            )
+            if payment["intent_id"]:
+                await db.execute(
+                    "UPDATE payment_intents SET status = ?, provider_payment_id = ?, "
+                    "paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = ?",
+                    (
+                        "paid_manual",
+                        payment["provider_payment_id"],
+                        payment["intent_id"],
+                        "pending",
+                    ),
+                )
+            await db.execute(
+                "INSERT INTO user_subscriptions "
+                "(user_tg_id, status, tariff_id, started_at, expires_at, updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, datetime(CURRENT_TIMESTAMP, '+' || ? || ' days'), CURRENT_TIMESTAMP) "
+                "ON CONFLICT(user_tg_id) DO UPDATE SET "
+                "status = excluded.status, "
+                "tariff_id = excluded.tariff_id, "
+                "started_at = CASE "
+                "WHEN user_subscriptions.status = 'paid' "
+                "AND user_subscriptions.started_at IS NOT NULL "
+                "THEN user_subscriptions.started_at ELSE excluded.started_at END, "
+                "expires_at = datetime("
+                "CASE WHEN user_subscriptions.expires_at > CURRENT_TIMESTAMP "
+                "THEN user_subscriptions.expires_at ELSE CURRENT_TIMESTAMP END, "
+                "'+' || ? || ' days'), "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    payment["user_tg_id"],
+                    "paid",
+                    payment["tariff_id"],
+                    tariff["duration_days"],
+                    tariff["duration_days"],
+                ),
+            )
+            cur = await db.execute(
+                "SELECT expires_at FROM user_subscriptions WHERE user_tg_id = ?",
+                (payment["user_tg_id"],),
+            )
+            row = await cur.fetchone()
+            await db.commit()
+            return {
+                "status": "approved",
+                "user_tg_id": payment["user_tg_id"],
+                "expires_at": row["expires_at"] if row else None,
+            }
+
     async def record_payment(
         self,
         user_tg_id: int,
@@ -1406,10 +1615,10 @@ class Repository:
             payment = await (await db.execute(
                 "SELECT * FROM paypal_payments WHERE order_id = ?", (order_id,)
             )).fetchone()
-            
+
             if not payment:
                 return {"status": "error", "reason": "not_found"}
-                
+
             if payment["status"] == "COMPLETED":
                 return {"status": "already_paid"}
 
@@ -1421,41 +1630,59 @@ class Repository:
                 await db.commit()
                 return {"status": status}
 
-            # Update order status
+            # PayPal payments are tracked in paypal_payments; extend access directly
+            # because record_payment is limited to Telegram Stars (XTR).
+            tariff = await (await db.execute(
+                "SELECT * FROM tariffs WHERE id = ?", (payment["tariff_id"],)
+            )).fetchone()
+
+            if not tariff:
+                return {"status": "error", "reason": "tariff_not_found"}
+
             now = datetime.now(timezone.utc)
             await db.execute(
                 """
-                UPDATE paypal_payments 
+                UPDATE paypal_payments
                 SET status = 'COMPLETED', captured_at = ?
                 WHERE order_id = ?
                 """,
                 (_format_ts(now), order_id),
             )
 
-            # Record standard payment and update subscription
-            tariff = await (await db.execute(
-                "SELECT * FROM tariffs WHERE id = ?", (payment["tariff_id"],)
-            )).fetchone()
-            
-            if not tariff:
-                await db.commit()
-                return {"status": "error", "reason": "tariff_not_found"}
-
-            expires_at, inserted = await self.record_payment(
-                user_tg_id=payment["user_tg_id"],
-                tariff_id=payment["tariff_id"],
-                payload=f"paypal:{order_id}",
-                currency=payment["currency"],
-                stars=tariff["stars"],
-                duration_days=tariff["duration_days"],
-                telegram_payment_charge_id="",
-                provider_payment_charge_id=order_id,
+            await db.execute(
+                "INSERT INTO user_subscriptions "
+                "(user_tg_id, status, tariff_id, started_at, expires_at, updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, datetime(CURRENT_TIMESTAMP, '+' || ? || ' days'), CURRENT_TIMESTAMP) "
+                "ON CONFLICT(user_tg_id) DO UPDATE SET "
+                "status = excluded.status, "
+                "tariff_id = excluded.tariff_id, "
+                "started_at = CASE "
+                "WHEN user_subscriptions.status = 'paid' "
+                "AND user_subscriptions.started_at IS NOT NULL "
+                "THEN user_subscriptions.started_at ELSE excluded.started_at END, "
+                "expires_at = datetime("
+                "CASE WHEN user_subscriptions.expires_at > CURRENT_TIMESTAMP "
+                "THEN user_subscriptions.expires_at ELSE CURRENT_TIMESTAMP END, "
+                "'+' || ? || ' days'), "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    payment["user_tg_id"],
+                    "paid",
+                    payment["tariff_id"],
+                    tariff["duration_days"],
+                    tariff["duration_days"],
+                ),
             )
-            
+            cur = await db.execute(
+                "SELECT expires_at FROM user_subscriptions WHERE user_tg_id = ?",
+                (payment["user_tg_id"],),
+            )
+            row = await cur.fetchone()
+
             await db.commit()
             return {
                 "status": "COMPLETED",
                 "user_tg_id": payment["user_tg_id"],
-                "expires_at": expires_at,
-                "inserted": inserted
+                "expires_at": row["expires_at"] if row else None,
+                "inserted": True
             }

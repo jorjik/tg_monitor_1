@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import re
 from typing import Optional
@@ -39,6 +39,7 @@ class HistoryScanResult:
     keywords: list[str]
     limit_reached: bool
     preview: list[HistoryMatch]
+    matches: list[HistoryMatch] = field(default_factory=list)
 
 
 def _default_now() -> datetime:
@@ -173,6 +174,7 @@ class HistoryScanner:
         matched = 0
         saved = 0
         preview: list[HistoryMatch] = []
+        matches: list[HistoryMatch] = []
         if not keywords:
             return HistoryScanResult(0, 0, 0, [], False, [])
 
@@ -210,18 +212,18 @@ class HistoryScanner:
             )
             if was_saved:
                 saved += 1
+            match = HistoryMatch(
+                message_id=message.id,
+                date=date,
+                sender_name=sender_name,
+                text=text,
+                matched_keywords=message_matches,
+                url=url,
+                saved=was_saved,
+            )
+            matches.append(match)
             if len(preview) < HISTORY_PREVIEW_LIMIT:
-                preview.append(
-                    HistoryMatch(
-                        message_id=message.id,
-                        date=date,
-                        sender_name=sender_name,
-                        text=text,
-                        matched_keywords=message_matches,
-                        url=url,
-                        saved=was_saved,
-                    )
-                )
+                preview.append(match)
 
         return HistoryScanResult(
             scanned=scanned,
@@ -230,4 +232,5 @@ class HistoryScanner:
             keywords=keywords,
             limit_reached=scanned >= max_messages,
             preview=preview,
+            matches=matches,
         )

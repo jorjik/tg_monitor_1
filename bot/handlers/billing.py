@@ -10,6 +10,8 @@ from bot.access import is_admin
 
 from bot.keyboards import (
     admin_payment_methods_kb,
+    admin_payment_review_detail_kb,
+    admin_payment_reviews_kb,
     admin_tariff_detail_kb,
     admin_tariffs_kb,
     kofi_payment_kb,
@@ -22,6 +24,7 @@ from bot.kofi import kofi_amount_for_tariff
 from bot.paypal import PayPalClient
 from bot.states import BillingAdminForm
 from core.config import (
+    ADMIN_USER_ID,
     KO_FI_AMOUNT_PER_STAR,
     KO_FI_CURRENCY,
     KO_FI_PAGE_URL,
@@ -177,6 +180,21 @@ async def _send_kofi_payment(callback: CallbackQuery, repo: Repository, tariff: 
     await callback.answer()
 
 
+async def _notify_admin_payment_error(callback: CallbackQuery, provider: str, error: str) -> None:
+    if not ADMIN_USER_ID:
+        return
+    try:
+        await callback.bot.send_message(
+            ADMIN_USER_ID,
+            f"⚠️ Ошибка оплаты {html.escape(provider)}\n\n"
+            f"Пользователь: <code>{callback.from_user.id}</code>\n"
+            f"Ошибка: <code>{html.escape(error)}</code>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.exception("Failed to notify admin about payment error")
+
+
 @router.message(F.text == "💳 Подписка")
 @router.message(Command("subscription"))
 @router.message(Command("billing"))
@@ -210,7 +228,7 @@ async def cb_billing_kofi(callback: CallbackQuery, repo: Repository):
 
 
 @router.callback_query(F.data.startswith("billing_paypal:"))
-async def cb_billing_paypal(callback: CallbackQuery, repo: Repository):
+async def cb_billing_paypal(callback: CallbackQuery, repo: Repository, paypal: PayPalClient):
     if not await _ensure_payment_method_enabled(callback, repo, "paypal"):
         return
     tariff_id = int(callback.data.split(":")[1])
@@ -225,7 +243,6 @@ async def cb_billing_paypal(callback: CallbackQuery, repo: Repository):
         await callback.answer("Ошибка настройки цены PayPal.", show_alert=True)
         return
 
-    paypal = PayPalClient()
     order = await paypal.create_order(
         amount=amount,
         currency=PAYPAL_CURRENCY,
@@ -233,7 +250,11 @@ async def cb_billing_paypal(callback: CallbackQuery, repo: Repository):
     )
 
     if not order:
-        await callback.answer("Не удалось создать заказ PayPal.", show_alert=True)
+        await _notify_admin_payment_error(callback, "PayPal", paypal.last_error or "unknown")
+        await callback.answer(
+            "PayPal временно недоступен. Попробуйте Ko-fi или перевод.",
+            show_alert=True,
+        )
         return
 
     order_id = order["id"]
@@ -266,13 +287,13 @@ async def cb_billing_paypal(callback: CallbackQuery, repo: Repository):
 
 
 @router.callback_query(F.data.startswith("paypal_check:"))
-async def cb_paypal_check(callback: CallbackQuery, repo: Repository):
+async def cb_paypal_check(callback: CallbackQuery, repo: Repository, paypal: PayPalClient):
     order_id = callback.data.split(":")[1]
-    paypal = PayPalClient()
     
     # Check current status
     order = await paypal.get_order(order_id)
     if not order:
+        await _notify_admin_payment_error(callback, "PayPal status", paypal.last_error or "unknown")
         await callback.answer("Заказ не найден в PayPal.", show_alert=True)
         return
 
@@ -290,10 +311,12 @@ async def cb_paypal_check(callback: CallbackQuery, repo: Repository):
                     reply_markup=main_menu_kb(is_admin=is_admin(callback.from_user.id), has_access=True),
                     parse_mode="HTML"
                 )
+                await callback.answer()
                 return
             else:
                 await callback.answer(f"Ошибка сохранения: {result.get('reason')}", show_alert=True)
         else:
+            await _notify_admin_payment_error(callback, "PayPal capture", paypal.last_error or "unknown")
             await callback.answer("Не удалось завершить платеж (Capture failed).", show_alert=True)
     elif status == "COMPLETED":
         # Check if already recorded
@@ -307,8 +330,9 @@ async def cb_paypal_check(callback: CallbackQuery, repo: Repository):
                 reply_markup=main_menu_kb(is_admin=is_admin(callback.from_user.id), has_access=True),
                 parse_mode="HTML"
             )
+            await callback.answer()
         else:
-             await callback.answer("Ошибка обработки статуса COMPLETED.", show_alert=True)
+            await callback.answer("Ошибка обработки статуса COMPLETED.", show_alert=True)
     else:
         await callback.answer(f"Статус платежа: {status}. Оплатите заказ в PayPal или попробуйте позже.", show_alert=True)
 
@@ -398,6 +422,89 @@ async def cb_admin_payment_toggle(callback: CallbackQuery, repo: Repository):
     await repo.set_payment_method_enabled(method, not payment_methods[method])
     await callback.answer("Обновлено")
     await _show_admin_payment_methods(callback.message, repo)
+
+
+def _payment_review_text(payment: dict) -> str:
+    user = payment.get("user_tg_id") or "не определён"
+    tariff = payment.get("tariff_name") or payment.get("tariff_id") or "не определён"
+    return (
+        "⚠️ <b>Ko-fi платёж на проверке</b>\n\n"
+        f"ID: <code>{html.escape(str(payment['provider_payment_id']))}</code>\n"
+        f"Причина: <code>{html.escape(str(payment.get('reason') or 'manual_review'))}</code>\n"
+        f"Пользователь: <code>{html.escape(str(user))}</code>\n"
+        f"Тариф: <b>{html.escape(str(tariff))}</b>\n"
+        f"Сумма: <b>{html.escape(str(payment['amount']))} {html.escape(payment['currency'])}</b>\n"
+        f"Код: <code>{html.escape(str(payment.get('code') or '—'))}</code>"
+    )
+
+
+async def _show_payment_reviews(message: Message, repo: Repository) -> None:
+    payments = await repo.list_kofi_manual_review_payments()
+    if payments:
+        text = (
+            "⚠️ <b>Проверка оплат</b>\n\n"
+            f"Платежей на проверке: <b>{len(payments)}</b>\n"
+            "Откройте платёж, чтобы зачесть или отклонить."
+        )
+    else:
+        text = "✅ <b>Проверка оплат</b>\n\nНет платежей на ручной проверке."
+    await message.edit_text(
+        text,
+        reply_markup=admin_payment_reviews_kb(payments),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "admin_payment_reviews")
+async def cb_admin_payment_reviews(callback: CallbackQuery, repo: Repository):
+    if not is_admin(callback.from_user.id):
+        return
+    await _show_payment_reviews(callback.message, repo)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_kofi_review:"))
+async def cb_admin_kofi_review(callback: CallbackQuery, repo: Repository):
+    if not is_admin(callback.from_user.id):
+        return
+    payment_id = int(callback.data.split(":")[1])
+    payment = await repo.get_kofi_payment_review(payment_id)
+    if not payment:
+        await callback.answer("Платёж не найден.", show_alert=True)
+        return
+    can_approve = bool(payment.get("user_tg_id") and payment.get("tariff_id"))
+    await callback.message.edit_text(
+        _payment_review_text(payment),
+        reply_markup=admin_payment_review_detail_kb(payment_id, can_approve),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_kofi_review_action:"))
+async def cb_admin_kofi_review_action(callback: CallbackQuery, repo: Repository):
+    if not is_admin(callback.from_user.id):
+        return
+    _, payment_id, action = callback.data.rsplit(":", 2)
+    result = await repo.resolve_kofi_manual_review_payment(int(payment_id), action)
+    if result["status"] == "approved":
+        if result.get("user_tg_id"):
+            try:
+                await callback.bot.send_message(
+                    result["user_tg_id"],
+                    "✅ Ko-fi платёж зачтён вручную. "
+                    f"Подписка активна до <code>{result['expires_at']}</code>.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception("Failed to notify user about manual Ko-fi approval")
+        await callback.answer("Платёж зачтён")
+    elif result["status"] == "rejected":
+        await callback.answer("Платёж отклонён")
+    else:
+        await callback.answer(f"Ошибка: {result.get('reason')}", show_alert=True)
+        return
+    await _show_payment_reviews(callback.message, repo)
 
 
 @router.callback_query(F.data.startswith("admin_tariff:"))
