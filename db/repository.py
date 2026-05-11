@@ -458,6 +458,33 @@ class Repository:
                 row = await cur.fetchone()
                 return dict(row) if row else None
 
+    async def count_bot_users(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM bot_users")
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    async def list_bot_users(self, limit: int = 10, offset: int = 0) -> list[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT bu.*,
+                       COALESCE(us.status, 'none') AS subscription_status,
+                       us.expires_at AS subscription_expires_at
+                FROM bot_users bu
+                LEFT JOIN user_subscriptions us ON us.user_tg_id = bu.tg_id
+                ORDER BY datetime(bu.updated_at) DESC, datetime(bu.created_at) DESC, bu.tg_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            )
+            users = [dict(r) for r in await cur.fetchall()]
+            for user in users:
+                expires_at = _parse_ts(user.get("subscription_expires_at"))
+                user["subscription_is_active"] = bool(expires_at and expires_at > _utc_now())
+            return users
+
     async def search_bot_user(self, query: str) -> Optional[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

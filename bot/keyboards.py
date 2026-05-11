@@ -308,6 +308,35 @@ def admin_payment_methods_kb(payment_methods: dict[str, bool]) -> InlineKeyboard
     return b.as_markup()
 
 
+def admin_users_kb() -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    b.button(text="📋 Список пользователей", callback_data="admin_users_list:0")
+    b.button(text="🔍 Поиск", callback_data="admin_users_search")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def admin_users_list_kb(
+    users: list[dict], page: int, total: int, page_size: int = 10
+) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    for user in users:
+        name = f"{user.get('first_name') or ''} {user.get('last_name') or ''}".strip()
+        label = f"@{user['username']}" if user.get("username") else name or str(user["tg_id"])
+        b.button(text=f"👤 {label}"[:64], callback_data=f"admin_user:{user['tg_id']}")
+    b.adjust(1)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_users_list:{page - 1}"))
+    if (page + 1) * page_size < total:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_users_list:{page + 1}"))
+    if nav:
+        b.row(*nav)
+    b.row(InlineKeyboardButton(text="🔍 Поиск", callback_data="admin_users_search"))
+    b.row(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_users"))
+    return b.as_markup()
+
+
 def admin_tariff_detail_kb(tariff: dict) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="✏️ Название", callback_data=f"admin_tariff_edit:{tariff['id']}:name")
