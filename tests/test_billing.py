@@ -171,14 +171,14 @@ class BillingRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(
                 await repo.get_payment_methods(),
-                {"kofi": True, "paypal": True, "manual": True},
+                {"monobank": True, "kofi": True, "paypal": True, "manual": True},
             )
 
             await repo.set_payment_method_enabled("paypal", False)
 
             self.assertEqual(
                 await repo.get_payment_methods(),
-                {"kofi": True, "paypal": False, "manual": True},
+                {"monobank": True, "kofi": True, "paypal": False, "manual": True},
             )
 
 
@@ -200,7 +200,7 @@ class BillingKeyboardTest(unittest.TestCase):
             button.text
             for row in subscription_kb(
                 tariffs,
-                {"kofi": True, "paypal": True, "manual": True},
+                {"monobank": True, "kofi": True, "paypal": True, "manual": True},
             ).inline_keyboard
             for button in row
         ]
@@ -213,6 +213,7 @@ class BillingKeyboardTest(unittest.TestCase):
             [
                 "🌍 Ko-fi — 30 дн.",
                 "💳 PayPal — 30 дн.",
+                "🇺🇦 Monobank — 30 дн.",
                 "💳 Перевод на карту (UA/USD)",
                 "🔙 Назад",
             ],
@@ -228,7 +229,7 @@ class BillingKeyboardTest(unittest.TestCase):
             button.text
             for row in subscription_kb(
                 tariffs,
-                {"kofi": False, "paypal": True, "manual": False},
+                {"monobank": False, "kofi": False, "paypal": True, "manual": False},
             ).inline_keyboard
             for button in row
         ]
@@ -239,7 +240,7 @@ class BillingKeyboardTest(unittest.TestCase):
         buttons = [
             (button.text, button.callback_data)
             for row in admin_payment_methods_kb(
-                {"kofi": True, "paypal": False, "manual": True}
+                {"monobank": False, "kofi": True, "paypal": False, "manual": True}
             ).inline_keyboard
             for button in row
         ]
@@ -247,6 +248,7 @@ class BillingKeyboardTest(unittest.TestCase):
         self.assertEqual(
             buttons,
             [
+                ("⭕ Monobank", "admin_payment_toggle:monobank"),
                 ("✅ Ko-fi", "admin_payment_toggle:kofi"),
                 ("⭕ PayPal", "admin_payment_toggle:paypal"),
                 ("✅ Перевод на карту", "admin_payment_toggle:manual"),

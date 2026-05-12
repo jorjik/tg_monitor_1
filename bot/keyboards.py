@@ -312,6 +312,7 @@ def admin_tariffs_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
 
 def admin_payment_methods_kb(payment_methods: dict[str, bool]) -> InlineKeyboardMarkup:
     labels = {
+        "monobank": "Monobank",
         "kofi": "Ko-fi",
         "paypal": "PayPal",
         "manual": "Перевод на карту",

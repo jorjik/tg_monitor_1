@@ -27,3 +27,6 @@ data/
 
 .DS_Store
 Thumbs.db
+tmp_test_billing.status
+tmp_aiogram_import.txt
+tmp_test_billing.out
