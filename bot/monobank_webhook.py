@@ -10,9 +10,6 @@ from bot.access import is_admin
 from bot.keyboards import main_menu_kb
 from core.config import (
     ADMIN_USER_ID,
-    MONOBANK_WEBHOOK_HOST,
-    MONOBANK_WEBHOOK_PATH,
-    MONOBANK_WEBHOOK_PORT,
 )
 from db.repository import Repository
 
@@ -130,23 +127,3 @@ async def _notify_admin(bot: Bot, transaction_id: str, result: dict) -> None:
         )
     except Exception:
         logger.exception("Failed to notify admin about Monobank manual review")
-
-
-async def start_monobank_webhook(bot: Bot, repo: Repository) -> Optional[web.AppRunner]:
-    """
-    Запустить webhook сервер для Monobank.
-
-    Для настройки webhook в Monobank используйте MonobankClient.set_webhook()
-    или вручную через API: POST https://api.monobank.ua/personal/webhook
-    """
-    path = MONOBANK_WEBHOOK_PATH if MONOBANK_WEBHOOK_PATH.startswith("/") else f"/{MONOBANK_WEBHOOK_PATH}"
-    app = web.Application()
-    app["bot"] = bot
-    app["repo"] = repo
-    app.router.add_post(path, handle_monobank_webhook)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, MONOBANK_WEBHOOK_HOST, MONOBANK_WEBHOOK_PORT)
-    await site.start()
-    logger.info(f"Monobank webhook: http://{MONOBANK_WEBHOOK_HOST}:{MONOBANK_WEBHOOK_PORT}{path}")
-    return runner
