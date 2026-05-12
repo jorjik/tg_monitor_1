@@ -504,18 +504,23 @@ def _payment_review_text(payment: dict) -> str:
 
 
 async def _show_payment_reviews(message: Message, repo: Repository) -> None:
-    payments = await repo.list_kofi_manual_review_payments()
-    if payments:
+    kofi_payments = await repo.list_kofi_manual_review_payments()
+    monobank_payments = await repo.list_monobank_manual_review_payments()
+    total_payments = len(kofi_payments) + len(monobank_payments)
+
+    if total_payments > 0:
         text = (
             "⚠️ <b>Проверка оплат</b>\n\n"
-            f"Платежей на проверке: <b>{len(payments)}</b>\n"
+            f"Платежей на проверке: <b>{total_payments}</b>\n"
+            f"Ko-fi: {len(kofi_payments)} | Monobank: {len(monobank_payments)}\n\n"
             "Откройте платёж, чтобы зачесть или отклонить."
         )
     else:
         text = "✅ <b>Проверка оплат</b>\n\nНет платежей на ручной проверке."
+
     await message.edit_text(
         text,
-        reply_markup=admin_payment_reviews_kb(payments),
+        reply_markup=admin_payment_reviews_kb(kofi_payments, monobank_payments),
         parse_mode="HTML",
     )
 
@@ -567,6 +572,73 @@ async def cb_admin_kofi_review_action(callback: CallbackQuery, repo: Repository)
     elif result["status"] == "rejected":
         await callback.answer("Платёж отклонён")
     else:
+        await callback.answer(f"Ошибка: {result.get('reason')}", show_alert=True)
+        return
+    await _show_payment_reviews(callback.message, repo)
+
+
+@router.callback_query(F.data.startswith("admin_monobank_review:"))
+async def cb_admin_monobank_review(callback: CallbackQuery, repo: Repository):
+    if not is_admin(callback.from_user.id):
+        return
+    payment_id = int(callback.data.split(":")[1])
+    payment = await repo.get_monobank_payment_review(payment_id)
+    if not payment:
+        await callback.answer("Платёж не найден.", show_alert=True)
+        return
+    can_approve = bool(payment.get("user_tg_id") and payment.get("tariff_id"))
+
+    # Форматируем сумму из копеек в гривны/доллары
+    amount_display = payment["amount"] / 100 if payment.get("amount") else 0
+    currency_codes = {980: "UAH", 840: "USD", 978: "EUR"}
+    currency = currency_codes.get(payment.get("currency_code", 980), "UAH")
+
+    user = payment.get("user_tg_id") or "не определён"
+    tariff = payment.get("tariff_name") or payment.get("tariff_id") or "не определён"
+
+    text = (
+        "⚠️ <b>Monobank платёж на проверке</b>\n\n"
+        f"ID транзакции: <code>{html.escape(str(payment['transaction_id']))}</code>\n"
+        f"Причина: <code>{html.escape(str(payment.get('reason') or 'manual_review'))}</code>\n"
+        f"Пользователь: <code>{html.escape(str(user))}</code>\n"
+        f"Тариф: <b>{html.escape(str(tariff))}</b>\n"
+        f"Сумма: <b>{amount_display:.2f} {currency}</b>\n"
+        f"Код: <code>{html.escape(str(payment.get('code') or '—'))}</code>\n"
+        f"Описание: {html.escape(str(payment.get('description') or '—'))}"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=admin_payment_review_detail_kb(payment_id, can_approve, provider="monobank"),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_monobank_review_action:"))
+async def cb_admin_monobank_review_action(callback: CallbackQuery, repo: Repository):
+    if not is_admin(callback.from_user.id):
+        return
+    _, payment_id, action = callback.data.rsplit(":", 2)
+    result = await repo.resolve_monobank_manual_review_payment(int(payment_id), action)
+    if result["status"] == "approved":
+        if result.get("user_tg_id"):
+            try:
+                await callback.bot.send_message(
+                    result["user_tg_id"],
+                    "✅ Monobank платёж зачтён вручную. "
+                    f"Подписка активна до <code>{result['expires_at']}</code>.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.exception("Failed to notify user about manual Monobank approval")
+        await callback.answer("Платёж зачтён")
+    elif result["status"] == "rejected":
+        await callback.answer("Платёж отклонён")
+    else:
+        await callback.answer(f"Ошибка: {result.get('reason')}", show_alert=True)
+        return
+    await _show_payment_reviews(callback.message, repo)
         await callback.answer(f"Ошибка: {result.get('reason')}", show_alert=True)
         return
     await _show_payment_reviews(callback.message, repo)

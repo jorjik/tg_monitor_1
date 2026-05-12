@@ -378,26 +378,39 @@ def admin_users_list_kb(
     return b.as_markup()
 
 
-def admin_payment_reviews_kb(payments: list[dict]) -> InlineKeyboardMarkup:
+def admin_payment_reviews_kb(kofi_payments: list[dict], monobank_payments: list[dict] = None) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
-    for payment in payments:
+
+    # Ko-fi платежи
+    for payment in kofi_payments:
         provider_id = str(payment.get("provider_payment_id") or payment["id"])
         reason = str(payment.get("reason") or "manual_review")
         b.button(
-            text=f"⚠️ {provider_id} — {reason}"[:64],
+            text=f"🌍 Ko-fi: {provider_id} — {reason}"[:64],
             callback_data=f"admin_kofi_review:{payment['id']}",
         )
+
+    # Monobank платежи
+    if monobank_payments:
+        for payment in monobank_payments:
+            transaction_id = str(payment.get("transaction_id") or payment["id"])
+            reason = str(payment.get("reason") or "manual_review")
+            b.button(
+                text=f"🇺🇦 Monobank: {transaction_id[:10]} — {reason}"[:64],
+                callback_data=f"admin_monobank_review:{payment['id']}",
+            )
+
     b.button(text="🔄 Обновить", callback_data="admin_payment_reviews")
     b.button(text="◀️ К тарифам", callback_data="admin_tariffs")
     b.adjust(1)
     return b.as_markup()
 
 
-def admin_payment_review_detail_kb(payment_id: int, can_approve: bool) -> InlineKeyboardMarkup:
+def admin_payment_review_detail_kb(payment_id: int, can_approve: bool, provider: str = "kofi") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if can_approve:
-        b.button(text="✅ Засчитать", callback_data=f"admin_kofi_review_action:{payment_id}:approve")
-    b.button(text="❌ Отклонить", callback_data=f"admin_kofi_review_action:{payment_id}:reject")
+        b.button(text="✅ Засчитать", callback_data=f"admin_{provider}_review_action:{payment_id}:approve")
+    b.button(text="❌ Отклонить", callback_data=f"admin_{provider}_review_action:{payment_id}:reject")
     b.button(text="◀️ К проверке оплат", callback_data="admin_payment_reviews")
     b.adjust(1)
     return b.as_markup()
