@@ -32,3 +32,12 @@ PAYPAL_CLIENT_SECRET: str = os.getenv("PAYPAL_CLIENT_SECRET", "").strip()
 PAYPAL_MODE: str = os.getenv("PAYPAL_MODE", "sandbox").strip()  # sandbox or live
 PAYPAL_CURRENCY: str = os.getenv("PAYPAL_CURRENCY", "USD").strip().upper()
 PAYPAL_AMOUNT_PER_STAR: str = os.getenv("PAYPAL_AMOUNT_PER_STAR", "1").strip()
+
+# Monobank
+MONOBANK_TOKEN: str = os.getenv("MONOBANK_TOKEN", "").strip()
+MONOBANK_ACCOUNT_ID: str = os.getenv("MONOBANK_ACCOUNT_ID", "").strip()
+MONOBANK_CURRENCY: str = os.getenv("MONOBANK_CURRENCY", "UAH").strip().upper()
+MONOBANK_AMOUNT_PER_STAR: str = os.getenv("MONOBANK_AMOUNT_PER_STAR", "10").strip()
+MONOBANK_WEBHOOK_HOST: str = os.getenv("MONOBANK_WEBHOOK_HOST", "0.0.0.0").strip()
+MONOBANK_WEBHOOK_PORT: int = _int_env("MONOBANK_WEBHOOK_PORT", 8081)
+MONOBANK_WEBHOOK_PATH: str = os.getenv("MONOBANK_WEBHOOK_PATH", "/webhooks/monobank").strip()

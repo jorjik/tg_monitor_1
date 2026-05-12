@@ -17,10 +17,12 @@ from bot.keyboards import (
     kofi_payment_kb,
     main_menu_kb,
     manual_payment_kb,
+    monobank_payment_kb,
     paypal_payment_kb,
     subscription_kb,
 )
 from bot.kofi import kofi_amount_for_tariff
+from bot.monobank import MonobankClient
 from bot.paypal import PayPalClient
 from bot.states import BillingAdminForm
 from core.config import (
@@ -28,6 +30,8 @@ from core.config import (
     KO_FI_AMOUNT_PER_STAR,
     KO_FI_CURRENCY,
     KO_FI_PAGE_URL,
+    MONOBANK_AMOUNT_PER_STAR,
+    MONOBANK_CURRENCY,
     PAYPAL_AMOUNT_PER_STAR,
     PAYPAL_CURRENCY,
 )
@@ -37,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 PAYMENT_METHOD_LABELS = {
+    "monobank": "Monobank",
     "kofi": "Ko-fi",
     "paypal": "PayPal",
     "manual": "Перевод на карту",
@@ -335,6 +340,66 @@ async def cb_paypal_check(callback: CallbackQuery, repo: Repository, paypal: Pay
             await callback.answer("Ошибка обработки статуса COMPLETED.", show_alert=True)
     else:
         await callback.answer(f"Статус платежа: {status}. Оплатите заказ в PayPal или попробуйте позже.", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("billing_monobank:"))
+async def cb_billing_monobank(callback: CallbackQuery, repo: Repository):
+    if not await _ensure_payment_method_enabled(callback, repo, "monobank"):
+        return
+    tariff_id = int(callback.data.split(":")[1])
+    tariff = await repo.get_tariff(tariff_id, active_only=True)
+    if not tariff:
+        await callback.answer("Тариф недоступен.", show_alert=True)
+        return
+    if not isinstance(callback.message, Message):
+        await callback.answer("Сообщение недоступно.", show_alert=True)
+        return
+
+    try:
+        # Рассчитываем сумму в копейках/центах
+        amount_per_star = float(MONOBANK_AMOUNT_PER_STAR)
+        stars = int(tariff["stars"])
+        amount_minor = int(amount_per_star * stars * 100)  # В копейках/центах
+    except (ValueError, KeyError):
+        await callback.answer("Ошибка настройки цены Monobank.", show_alert=True)
+        return
+
+    # Определяем код валюты (980 = UAH, 840 = USD)
+    currency_codes = {"UAH": 980, "USD": 840, "EUR": 978}
+    currency_code = currency_codes.get(MONOBANK_CURRENCY, 980)
+
+    # Создаем намерение оплаты
+    intent = await repo.create_monobank_payment_intent(
+        user_tg_id=callback.from_user.id,
+        tariff_id=tariff["id"],
+        amount=amount_minor,
+        currency_code=currency_code,
+        duration_days=tariff["duration_days"],
+    )
+    if not intent:
+        await callback.answer("Тариф недоступен.", show_alert=True)
+        return
+
+    # Форматируем сумму для отображения
+    amount_display = amount_minor / 100
+
+    await callback.message.answer(
+        "🇺🇦 <b>Оплата через Monobank</b>\n\n"
+        f"Тариф: <b>{html.escape(tariff['name'])}</b>\n"
+        f"Сумма: <b>{amount_display:.2f} {html.escape(MONOBANK_CURRENCY)}</b>\n"
+        f"Срок: <b>{tariff['duration_days']}</b> дней\n\n"
+        "<b>Инструкция:</b>\n"
+        "1. Откройте приложение Monobank\n"
+        "2. Переведите указанную сумму на карту:\n"
+        f"   <code>5375414122814957</code>\n\n"
+        "3. <b>Обязательно</b> укажите в комментарии ваш код:\n"
+        f"   <code>{html.escape(intent['code'])}</code>\n\n"
+        "После перевода бот автоматически активирует подписку через webhook.\n"
+        "Если что-то пойдет не так, администратор проверит платеж вручную.",
+        reply_markup=monobank_payment_kb(intent["code"]),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "billing_back")

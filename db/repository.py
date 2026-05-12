@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import secrets
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 BILLING_TRIAL_DAYS_KEY = "billing_trial_days"
 DEFAULT_TRIAL_DAYS = 7
 GEO_FILTER_DEFAULT_MIGRATED_KEY = "geo_filter_empty_default_migrated"
-PAYMENT_METHODS = ("kofi", "paypal", "manual")
+PAYMENT_METHODS = ("monobank", "kofi", "paypal", "manual")
 PAYMENT_METHOD_SETTING_PREFIX = "payment_method_enabled_"
 NOTIFICATION_COOLDOWN_KEY = "notification_cooldown_minutes"
 NOTIFICATION_LAST_SENT_KEY = "notification_last_sent_at"
@@ -173,6 +174,21 @@ CREATE TABLE IF NOT EXISTS paypal_payments (
     status TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     captured_at TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS monobank_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id TEXT NOT NULL UNIQUE,
+    intent_id INTEGER REFERENCES payment_intents(id),
+    user_tg_id INTEGER,
+    tariff_id INTEGER,
+    code TEXT,
+    amount INTEGER NOT NULL,
+    currency_code INTEGER NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL,
+    reason TEXT,
+    raw_payload TEXT NOT NULL,
+    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -1685,4 +1701,312 @@ class Repository:
                 "user_tg_id": payment["user_tg_id"],
                 "expires_at": row["expires_at"] if row else None,
                 "inserted": True
+            }
+
+    async def create_monobank_payment_intent(
+        self,
+        user_tg_id: int,
+        tariff_id: int,
+        amount: int,
+        currency_code: int,
+        duration_days: int,
+    ) -> Optional[dict]:
+        """Создать намерение оплаты через Monobank."""
+        code = _payment_code().replace("KF-", "MB-")  # MB- prefix for Monobank
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute(
+                "INSERT INTO payment_intents "
+                "(provider, code, user_tg_id, tariff_id, amount, currency, duration_days, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("monobank", code, user_tg_id, tariff_id, str(amount), str(currency_code), duration_days, "pending"),
+            )
+            await db.commit()
+            cur = await db.execute(
+                "SELECT * FROM payment_intents WHERE code = ?", (code,)
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def record_monobank_webhook(
+        self, transaction_id: str, amount: int, currency_code: int, description: str, raw_payload: dict
+    ) -> dict:
+        """Записать webhook от Monobank и обработать платеж."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+
+            # Проверяем, не обработан ли уже этот платеж
+            cur = await db.execute(
+                "SELECT * FROM monobank_payments WHERE transaction_id = ?",
+                (transaction_id,),
+            )
+            existing = await cur.fetchone()
+            if existing:
+                return {
+                    "status": "already_processed",
+                    "reason": "duplicate_transaction",
+                }
+
+            # Ищем код платежа в описании (MB-XXXXXXXX)
+            import re
+            code_match = re.search(r"\bMB-[A-Z0-9]{8,16}\b", description or "", re.IGNORECASE)
+            code = code_match.group(0).upper() if code_match else None
+
+            if not code:
+                # Платеж без кода - сохраняем на ручную проверку
+                await db.execute(
+                    "INSERT INTO monobank_payments "
+                    "(transaction_id, amount, currency_code, description, status, reason, raw_payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        transaction_id,
+                        amount,
+                        currency_code,
+                        description,
+                        "manual_review",
+                        "code_not_found",
+                        json.dumps(raw_payload),
+                    ),
+                )
+                await db.commit()
+                return {
+                    "status": "manual_review",
+                    "reason": "code_not_found",
+                }
+
+            # Ищем намерение оплаты по коду
+            cur = await db.execute(
+                "SELECT * FROM payment_intents WHERE code = ? AND provider = ? AND status = ?",
+                (code, "monobank", "pending"),
+            )
+            intent = await cur.fetchone()
+
+            if not intent:
+                # Код не найден или уже использован
+                await db.execute(
+                    "INSERT INTO monobank_payments "
+                    "(transaction_id, code, amount, currency_code, description, status, reason, raw_payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        transaction_id,
+                        code,
+                        amount,
+                        currency_code,
+                        description,
+                        "manual_review",
+                        "intent_not_found",
+                        json.dumps(raw_payload),
+                    ),
+                )
+                await db.commit()
+                return {
+                    "status": "manual_review",
+                    "reason": "intent_not_found",
+                    "code": code,
+                }
+
+            # Проверяем сумму (amount в Monobank в копейках/центах)
+            expected_amount = int(intent["amount"])
+            if amount != expected_amount:
+                await db.execute(
+                    "INSERT INTO monobank_payments "
+                    "(transaction_id, intent_id, user_tg_id, tariff_id, code, amount, "
+                    "currency_code, description, status, reason, raw_payload) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        transaction_id,
+                        intent["id"],
+                        intent["user_tg_id"],
+                        intent["tariff_id"],
+                        code,
+                        amount,
+                        currency_code,
+                        description,
+                        "manual_review",
+                        f"amount_mismatch_expected_{expected_amount}_got_{amount}",
+                        json.dumps(raw_payload),
+                    ),
+                )
+                await db.commit()
+                return {
+                    "status": "manual_review",
+                    "reason": "amount_mismatch",
+                    "expected": expected_amount,
+                    "received": amount,
+                }
+
+            # Все проверки пройдены - зачисляем платеж
+            await db.execute(
+                "INSERT INTO monobank_payments "
+                "(transaction_id, intent_id, user_tg_id, tariff_id, code, amount, "
+                "currency_code, description, status, raw_payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    transaction_id,
+                    intent["id"],
+                    intent["user_tg_id"],
+                    intent["tariff_id"],
+                    code,
+                    amount,
+                    currency_code,
+                    description,
+                    "paid",
+                    json.dumps(raw_payload),
+                ),
+            )
+
+            # Обновляем намерение
+            await db.execute(
+                "UPDATE payment_intents SET status = ?, provider_payment_id = ?, "
+                "paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                ("paid", transaction_id, intent["id"]),
+            )
+
+            # Активируем подписку
+            cur = await db.execute("SELECT * FROM tariffs WHERE id = ?", (intent["tariff_id"],))
+            tariff = await cur.fetchone()
+            if not tariff:
+                await db.commit()
+                return {"status": "error", "reason": "tariff_not_found"}
+
+            await db.execute(
+                "INSERT INTO user_subscriptions "
+                "(user_tg_id, status, tariff_id, started_at, expires_at, updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, datetime(CURRENT_TIMESTAMP, '+' || ? || ' days'), CURRENT_TIMESTAMP) "
+                "ON CONFLICT(user_tg_id) DO UPDATE SET "
+                "status = ?, tariff_id = ?, "
+                "expires_at = datetime(CASE WHEN user_subscriptions.expires_at > CURRENT_TIMESTAMP "
+                "THEN user_subscriptions.expires_at ELSE CURRENT_TIMESTAMP END, '+' || ? || ' days'), "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    intent["user_tg_id"],
+                    "paid",
+                    intent["tariff_id"],
+                    tariff["duration_days"],
+                    "paid",
+                    intent["tariff_id"],
+                    tariff["duration_days"],
+                ),
+            )
+
+            cur = await db.execute(
+                "SELECT expires_at FROM user_subscriptions WHERE user_tg_id = ?",
+                (intent["user_tg_id"],),
+            )
+            row = await cur.fetchone()
+
+            await db.commit()
+            return {
+                "status": "paid",
+                "user_tg_id": intent["user_tg_id"],
+                "expires_at": row["expires_at"] if row else None,
+            }
+
+    async def list_monobank_manual_review_payments(self, limit: int = 10) -> list[dict]:
+        """Получить список Monobank платежей на ручной проверке."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT mp.*, bu.username, bu.first_name, bu.last_name, t.name AS tariff_name "
+                "FROM monobank_payments mp "
+                "LEFT JOIN bot_users bu ON bu.tg_id = mp.user_tg_id "
+                "LEFT JOIN tariffs t ON t.id = mp.tariff_id "
+                "WHERE mp.status = 'manual_review' "
+                "ORDER BY datetime(mp.received_at) DESC LIMIT ?",
+                (limit,),
+            )
+            return [dict(row) for row in await cur.fetchall()]
+
+    async def get_monobank_payment_review(self, payment_id: int) -> Optional[dict]:
+        """Получить детали Monobank платежа на проверке."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT mp.*, bu.username, bu.first_name, bu.last_name, t.name AS tariff_name, "
+                "t.duration_days AS tariff_duration_days "
+                "FROM monobank_payments mp "
+                "LEFT JOIN bot_users bu ON bu.tg_id = mp.user_tg_id "
+                "LEFT JOIN tariffs t ON t.id = mp.tariff_id "
+                "WHERE mp.id = ?",
+                (payment_id,),
+            )
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def resolve_monobank_manual_review_payment(self, payment_id: int, action: str) -> dict:
+        """Одобрить или отклонить Monobank платеж на ручной проверке."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM monobank_payments WHERE id = ?", (payment_id,))
+            payment = await cur.fetchone()
+            if not payment:
+                return {"status": "error", "reason": "not_found"}
+            if payment["status"] != "manual_review":
+                return {"status": "error", "reason": "not_manual_review"}
+
+            if action == "reject":
+                await db.execute(
+                    "UPDATE monobank_payments SET status = ?, reason = ? WHERE id = ?",
+                    ("rejected", "manual_rejected", payment_id),
+                )
+                await db.commit()
+                return {"status": "rejected", "user_tg_id": payment["user_tg_id"]}
+
+            if action != "approve":
+                return {"status": "error", "reason": "unknown_action"}
+
+            if not payment["user_tg_id"] or not payment["tariff_id"]:
+                return {"status": "error", "reason": "user_or_tariff_missing"}
+
+            tariff = await (
+                await db.execute("SELECT * FROM tariffs WHERE id = ?", (payment["tariff_id"],))
+            ).fetchone()
+            if not tariff:
+                return {"status": "error", "reason": "tariff_not_found"}
+
+            await db.execute(
+                "UPDATE monobank_payments SET status = ?, reason = NULL WHERE id = ?",
+                ("paid_manual", payment_id),
+            )
+
+            if payment["intent_id"]:
+                await db.execute(
+                    "UPDATE payment_intents SET status = ?, provider_payment_id = ?, "
+                    "paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND status = ?",
+                    ("paid_manual", payment["transaction_id"], payment["intent_id"], "pending"),
+                )
+
+            await db.execute(
+                "INSERT INTO user_subscriptions "
+                "(user_tg_id, status, tariff_id, started_at, expires_at, updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, datetime(CURRENT_TIMESTAMP, '+' || ? || ' days'), CURRENT_TIMESTAMP) "
+                "ON CONFLICT(user_tg_id) DO UPDATE SET "
+                "status = ?, tariff_id = ?, "
+                "expires_at = datetime(CASE WHEN user_subscriptions.expires_at > CURRENT_TIMESTAMP "
+                "THEN user_subscriptions.expires_at ELSE CURRENT_TIMESTAMP END, '+' || ? || ' days'), "
+                "updated_at = CURRENT_TIMESTAMP",
+                (
+                    payment["user_tg_id"],
+                    "paid",
+                    payment["tariff_id"],
+                    tariff["duration_days"],
+                    "paid",
+                    payment["tariff_id"],
+                    tariff["duration_days"],
+                ),
+            )
+
+            cur = await db.execute(
+                "SELECT expires_at FROM user_subscriptions WHERE user_tg_id = ?",
+                (payment["user_tg_id"],),
+            )
+            row = await cur.fetchone()
+
+            await db.commit()
+            return {
+                "status": "approved",
+                "user_tg_id": payment["user_tg_id"],
+                "expires_at": row["expires_at"] if row else None,
             }

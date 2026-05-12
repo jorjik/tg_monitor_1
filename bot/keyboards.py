@@ -250,6 +250,11 @@ def subscription_kb(
                 text=f"💳 PayPal — {tariff['duration_days']} дн.",
                 callback_data=f"billing_paypal:{tariff['id']}",
             )
+        if _payment_enabled(payment_methods, "monobank"):
+            b.button(
+                text=f"🇺🇦 Monobank — {tariff['duration_days']} дн.",
+                callback_data=f"billing_monobank:{tariff['id']}",
+            )
     if _payment_enabled(payment_methods, "manual"):
         b.button(text="💳 Перевод на карту (UA/USD)", callback_data="billing_manual")
     b.button(text="🔙 Назад", callback_data="main_menu")
@@ -269,6 +274,13 @@ def paypal_payment_kb(approval_url: str, order_id: str) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     b.button(text="💳 Оплатить через PayPal", url=approval_url)
     b.button(text="✅ Проверить статус", callback_data=f"paypal_check:{order_id}")
+    b.button(text="◀️ К подписке", callback_data="billing_back")
+    b.adjust(1)
+    return b.as_markup()
+
+
+def monobank_payment_kb(code: str) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
     b.button(text="◀️ К подписке", callback_data="billing_back")
     b.adjust(1)
     return b.as_markup()
