@@ -639,9 +639,6 @@ async def cb_admin_monobank_review_action(callback: CallbackQuery, repo: Reposit
         await callback.answer(f"Ошибка: {result.get('reason')}", show_alert=True)
         return
     await _show_payment_reviews(callback.message, repo)
-        await callback.answer(f"Ошибка: {result.get('reason')}", show_alert=True)
-        return
-    await _show_payment_reviews(callback.message, repo)
 
 
 @router.callback_query(F.data.startswith("admin_tariff:"))
