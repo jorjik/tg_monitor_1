@@ -25,9 +25,8 @@ from bot.handlers import (
     monitor,
     topics,
 )
-from bot.kofi_webhook import start_kofi_webhook
 from bot.monobank import MonobankClient
-from bot.monobank_webhook import start_monobank_webhook
+from bot.payment_webhooks import start_payment_webhooks
 from bot.paypal import PayPalClient
 from core.config import (
     API_HASH,
@@ -141,16 +140,13 @@ async def main() -> None:
     dp.include_router(monitor.router)
     dp.include_router(geo_filter.router)
 
-    kofi_webhook_runner = await start_kofi_webhook(bot, repo)
-    monobank_webhook_runner = await start_monobank_webhook(bot, repo)
+    webhook_runner = await start_payment_webhooks(bot, repo)
     logger.info("Бот запускается...")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        if kofi_webhook_runner:
-            await kofi_webhook_runner.cleanup()
-        if monobank_webhook_runner:
-            await monobank_webhook_runner.cleanup()
+        if webhook_runner:
+            await webhook_runner.cleanup()
         await watcher.stop()
         await userbot.disconnect()
         await bot.session.close()

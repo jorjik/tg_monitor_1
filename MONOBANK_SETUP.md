@@ -16,8 +16,6 @@ MONOBANK_TOKEN=ваш_токен_от_api.monobank.ua
 MONOBANK_ACCOUNT_ID=0
 MONOBANK_CURRENCY=UAH
 MONOBANK_AMOUNT_PER_STAR=10
-MONOBANK_WEBHOOK_HOST=0.0.0.0
-MONOBANK_WEBHOOK_PORT=8081
 MONOBANK_WEBHOOK_PATH=/webhooks/monobank
 ```
 
@@ -26,7 +24,7 @@ MONOBANK_WEBHOOK_PATH=/webhooks/monobank
 - `MONOBANK_ACCOUNT_ID` - ID счета (0 = первый счет, можно узнать через API)
 - `MONOBANK_CURRENCY` - валюта (UAH, USD, EUR)
 - `MONOBANK_AMOUNT_PER_STAR` - цена 1 звезды в гривнах (10 грн = 1 звезда)
-- `MONOBANK_WEBHOOK_PORT` - порт для webhook (8081, чтобы не конфликтовать с Ko-fi на 8080)
+- `MONOBANK_WEBHOOK_PATH` - путь для webhook (используется общий порт с Ko-fi)
 
 ## 3. Настройка webhook в Monobank
 
@@ -99,13 +97,29 @@ if __name__ == "__main__":
 
 Webhook должен быть доступен из интернета по HTTPS.
 
+**Важно:** Ko-fi и Monobank webhook работают на **одном порту** (8080):
+- Ko-fi: `https://ваш-домен.com/webhooks/kofi`
+- Monobank: `https://ваш-домен.com/webhooks/monobank`
+
 ### Локальная разработка (ngrok):
 
 ```bash
-ngrok http 8081
+ngrok http 8080
 ```
 
 Используйте URL от ngrok для webhook.
+
+### Railway:
+
+Railway автоматически предоставляет публичный URL:
+```
+https://ваш-проект.up.railway.app
+```
+
+Webhook будет доступен по адресу:
+```
+https://ваш-проект.up.railway.app/webhooks/monobank
+```
 
 ### Продакшн (nginx):
 
@@ -117,8 +131,9 @@ server {
     ssl_certificate /path/to/cert.pem;
     ssl_certificate_key /path/to/key.pem;
 
-    location /webhooks/monobank {
-        proxy_pass http://127.0.0.1:8081;
+    # Единый порт для всех webhook
+    location /webhooks/ {
+        proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -153,9 +168,10 @@ server {
 
 ### Webhook не работает
 
-1. Проверьте, что порт 8081 открыт
+1. Проверьте, что порт 8080 открыт (единый для Ko-fi и Monobank)
 2. Проверьте логи: `tail -f data/monitor.log`
 3. Убедитесь, что URL доступен извне: `curl https://ваш-домен.com/webhooks/monobank`
+4. Проверьте, что оба webhook запустились: в логах должно быть "Payment webhooks started"
 
 ### Платежи не находятся
 
