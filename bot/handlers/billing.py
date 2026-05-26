@@ -16,7 +16,6 @@ from bot.keyboards import (
     admin_tariffs_kb,
     kofi_payment_kb,
     main_menu_kb,
-    manual_payment_kb,
     monobank_payment_kb,
     paypal_payment_kb,
     subscription_kb,
@@ -44,7 +43,6 @@ PAYMENT_METHOD_LABELS = {
     "monobank": "Monobank",
     "kofi": "Ko-fi",
     "paypal": "PayPal",
-    "manual": "Перевод на карту",
 }
 
 
@@ -827,30 +825,3 @@ async def process_trial_days(message: Message, state: FSMContext, repo: Reposito
     await _show_admin_tariffs(message, repo)
 
 
-@router.callback_query(F.data == "billing_manual")
-async def cb_billing_manual(callback: CallbackQuery, repo: Repository):
-    if not await _ensure_payment_method_enabled(callback, repo, "manual"):
-        return
-    if not isinstance(callback.message, Message):
-        await callback.answer("Сообщение недоступно.", show_alert=True)
-        return
-    text = (
-        "💳 <b>Прямой перевод на карту</b>\n\n"
-        "Вы можете оплатить подписку напрямую. "
-        "После оплаты обязательно пришлите <b>скриншот/чек</b> администратору "
-        "<a href='https://t.me/potok2023'>@potok2023</a>.\n\n"
-        "<b>Реквизиты:</b>\n\n"
-        "🇺🇦 MonoBank (UAH): <b>220 грн</b>\n"
-        "<code>4441111062731694</code>\n\n"
-        "💵 MonoBank (USD): <b>5$</b>\n"
-        "<code>4441111088169200</code>\n\n"
-        "👤 Получатель: <b>Грибков Е.Г.</b>\n\n"
-        "⚠️ <i>Нажмите на номер карты выше, чтобы скопировать его.</i>\n\n"
-        "После перевода напишите администратору для активации доступа."
-    )
-    await callback.message.edit_text(
-        text,
-        reply_markup=manual_payment_kb(),
-        parse_mode="HTML"
-    )
-    await callback.answer()

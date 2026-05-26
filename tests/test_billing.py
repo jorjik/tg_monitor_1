@@ -7,7 +7,6 @@ import unittest
 from aiogram.types import Chat, Message
 
 from bot.access import user_has_paid_access
-from bot.handlers.billing import cb_billing_manual
 from bot.keyboards import (
     admin_payment_methods_kb,
     admin_tariffs_kb,
@@ -171,14 +170,14 @@ class BillingRepositoryTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(
                 await repo.get_payment_methods(),
-                {"monobank": True, "kofi": True, "paypal": True, "manual": True},
+                {"monobank": True, "kofi": True, "paypal": True},
             )
 
             await repo.set_payment_method_enabled("paypal", False)
 
             self.assertEqual(
                 await repo.get_payment_methods(),
-                {"monobank": True, "kofi": True, "paypal": False, "manual": True},
+                {"monobank": True, "kofi": True, "paypal": False},
             )
 
 
@@ -200,7 +199,7 @@ class BillingKeyboardTest(unittest.TestCase):
             button.text
             for row in subscription_kb(
                 tariffs,
-                {"monobank": True, "kofi": True, "paypal": True, "manual": True},
+                {"monobank": True, "kofi": True, "paypal": True},
             ).inline_keyboard
             for button in row
         ]
@@ -214,7 +213,6 @@ class BillingKeyboardTest(unittest.TestCase):
                 "🌍 Ko-fi — 30 дн.",
                 "💳 PayPal — 30 дн.",
                 "🇺🇦 Monobank — 30 дн.",
-                "💳 Перевод на карту (UA/USD)",
                 "🔙 Назад",
             ],
         )
@@ -229,7 +227,7 @@ class BillingKeyboardTest(unittest.TestCase):
             button.text
             for row in subscription_kb(
                 tariffs,
-                {"monobank": False, "kofi": False, "paypal": True, "manual": False},
+                {"monobank": False, "kofi": False, "paypal": True},
             ).inline_keyboard
             for button in row
         ]
@@ -240,7 +238,7 @@ class BillingKeyboardTest(unittest.TestCase):
         buttons = [
             (button.text, button.callback_data)
             for row in admin_payment_methods_kb(
-                {"monobank": False, "kofi": True, "paypal": False, "manual": True}
+                {"monobank": False, "kofi": True, "paypal": False}
             ).inline_keyboard
             for button in row
         ]
@@ -251,76 +249,9 @@ class BillingKeyboardTest(unittest.TestCase):
                 ("⭕ Monobank", "admin_payment_toggle:monobank"),
                 ("✅ Ko-fi", "admin_payment_toggle:kofi"),
                 ("⭕ PayPal", "admin_payment_toggle:paypal"),
-                ("✅ Перевод на карту", "admin_payment_toggle:manual"),
                 ("◀️ К тарифам", "admin_tariffs"),
             ],
         )
-
-
-class FakeManualPaymentMessage(Message):
-    def __init__(self):
-        super().__init__(
-            message_id=1,
-            date=datetime.now(),
-            chat=Chat(id=123, type="private"),
-        )
-        object.__setattr__(self, "edited_text", None)
-        object.__setattr__(self, "reply_markup", None)
-        object.__setattr__(self, "parse_mode", None)
-
-    async def edit_text(self, text, reply_markup=None, parse_mode=None):
-        object.__setattr__(self, "edited_text", text)
-        object.__setattr__(self, "reply_markup", reply_markup)
-        object.__setattr__(self, "parse_mode", parse_mode)
-
-
-class FakeManualPaymentCallback:
-    def __init__(self):
-        self.from_user = type("User", (), {"id": 123})()
-        self.message = FakeManualPaymentMessage()
-        self.answered = False
-        self.answer_text = None
-        self.answer_show_alert = None
-
-    async def answer(self, text=None, show_alert=None, **kwargs):
-        self.answered = True
-        self.answer_text = text
-        self.answer_show_alert = show_alert
-
-
-class FakePaymentMethodsRepo:
-    def __init__(self, enabled=True):
-        self.enabled = enabled
-
-    async def is_payment_method_enabled(self, method):
-        return self.enabled
-
-
-class BillingManualPaymentTest(unittest.IsolatedAsyncioTestCase):
-    async def test_manual_card_payment_button_opens_details(self):
-        callback = FakeManualPaymentCallback()
-
-        await cb_billing_manual(callback, FakePaymentMethodsRepo())
-
-        self.assertTrue(callback.answered)
-        self.assertIn("Прямой перевод на карту", callback.message.edited_text)
-        self.assertEqual(callback.message.parse_mode, "HTML")
-        buttons = [
-            button.text
-            for row in callback.message.reply_markup.inline_keyboard
-            for button in row
-        ]
-        self.assertIn("💬 Написать администратору", buttons)
-
-    async def test_manual_card_payment_button_respects_admin_visibility(self):
-        callback = FakeManualPaymentCallback()
-
-        await cb_billing_manual(callback, FakePaymentMethodsRepo(enabled=False))
-
-        self.assertTrue(callback.answered)
-        self.assertEqual(callback.answer_text, "Перевод на карту сейчас недоступен.")
-        self.assertTrue(callback.answer_show_alert)
-        self.assertIsNone(callback.message.edited_text)
 
 
 if __name__ == "__main__":

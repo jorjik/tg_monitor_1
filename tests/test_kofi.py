@@ -165,7 +165,7 @@ class KofiKeyboardTest(unittest.TestCase):
             [
                 "🌍 Ko-fi — 30 дн.",
                 "💳 PayPal — 30 дн.",
-                "💳 Перевод на карту (UA/USD)",
+                "🇺🇦 Monobank — 30 дн.",
                 "🔙 Назад",
             ],
         )

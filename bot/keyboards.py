@@ -255,8 +255,6 @@ def subscription_kb(
                 text=f"🇺🇦 Monobank — {tariff['duration_days']} дн.",
                 callback_data=f"billing_monobank:{tariff['id']}",
             )
-    if _payment_enabled(payment_methods, "manual"):
-        b.button(text="💳 Перевод на карту (UA/USD)", callback_data="billing_manual")
     b.button(text="🔙 Назад", callback_data="main_menu")
     b.adjust(1)
     return b.as_markup()
@@ -286,14 +284,6 @@ def monobank_payment_kb(code: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def manual_payment_kb() -> InlineKeyboardMarkup:
-    b = InlineKeyboardBuilder()
-    b.button(text="💬 Написать администратору", url="https://t.me/potok2023")
-    b.button(text="◀️ Назад", callback_data="billing_back")
-    b.adjust(1)
-    return b.as_markup()
-
-
 def admin_tariffs_kb(tariffs: list[dict]) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for tariff in tariffs:
@@ -315,7 +305,6 @@ def admin_payment_methods_kb(payment_methods: dict[str, bool]) -> InlineKeyboard
         "monobank": "Monobank",
         "kofi": "Ko-fi",
         "paypal": "PayPal",
-        "manual": "Перевод на карту",
     }
     b = InlineKeyboardBuilder()
     for method, label in labels.items():
