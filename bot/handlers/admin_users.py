@@ -186,7 +186,7 @@ async def _user_detail_text(repo: Repository, user: dict) -> str:
         f"👤 <b>Пользователь:</b> {html.escape(name)}\n"
         f"🆔 ID: <code>{user['tg_id']}</code>\n"
         f"🔗 Username: {html.escape(username)}\n\n"
-        f"📊 Статус подписки: {status_icon} <b>{access['status']}</b>\n"
+        f"📊 Статус подписки: {status_icon} <b>{html.escape(str(access['status']))}</b>\n"
         f"📅 Истекает: <code>{access['expires_at'] or '—'}</code>\n\n"
         "Выберите действие ниже, чтобы начислить бонусные дни:"
     )

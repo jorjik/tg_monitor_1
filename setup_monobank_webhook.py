@@ -6,23 +6,29 @@ import os
 sys.path.append(os.getcwd())
 
 from bot.monobank import MonobankClient
-from core.config import MONOBANK_TOKEN, MONOBANK_WEBHOOK_PATH
+from core.config import MONOBANK_TOKEN, MONOBANK_WEBHOOK_PATH, MONOBANK_WEBHOOK_SECRET
 
 async def main():
     if not MONOBANK_TOKEN:
         print("❌ Ошибка: В файле .env не указан MONOBANK_TOKEN")
         return
 
+    if not MONOBANK_WEBHOOK_SECRET:
+        print("❌ Ошибка: не задан MONOBANK_WEBHOOK_SECRET.")
+        print("Без секрета вебхук Monobank остаётся открытым для подделки платежей.")
+        print("Сгенерируйте секрет, например: python -c \"import secrets;print(secrets.token_urlsafe(32))\"")
+        return
+
     if len(sys.argv) < 2:
         print("❌ Ошибка: Не указан URL вебхука")
         print("\nИспользование:")
         print("  python setup_monobank_webhook.py https://ваш-домен.com")
-        print("\nСкрипт автоматически добавит путь к вебхуку из конфига:")
-        print(f"  Результат: https://ваш-домен.com{MONOBANK_WEBHOOK_PATH}")
+        print("\nСкрипт автоматически добавит путь и секрет из конфига:")
+        print(f"  Результат: https://ваш-домен.com{MONOBANK_WEBHOOK_PATH}/{MONOBANK_WEBHOOK_SECRET}")
         return
 
     domain = sys.argv[1].rstrip('/')
-    webhook_url = f"{domain}{MONOBANK_WEBHOOK_PATH}"
+    webhook_url = f"{domain}{MONOBANK_WEBHOOK_PATH.rstrip('/')}/{MONOBANK_WEBHOOK_SECRET}"
 
     client = MonobankClient(MONOBANK_TOKEN)
     

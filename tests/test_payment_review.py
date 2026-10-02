@@ -118,7 +118,7 @@ class PaymentReviewKeyboardTest(unittest.TestCase):
         ).inline_keyboard
         buttons = [button.text for row in rows for button in row]
 
-        self.assertIn("⚠️ msg-1 — code_missing", buttons)
+        self.assertIn("🌍 Ko-fi: msg-1 — code_missing", buttons)
 
 
 if __name__ == "__main__":

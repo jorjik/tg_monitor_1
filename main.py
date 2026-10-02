@@ -25,7 +25,6 @@ from bot.handlers import (
     monitor,
     topics,
 )
-from bot.monobank import MonobankClient
 from bot.payment_webhooks import start_payment_webhooks
 from bot.paypal import PayPalClient
 from core.config import (
@@ -33,7 +32,7 @@ from core.config import (
     API_ID,
     BOT_TOKEN,
     DB_PATH,
-    MONOBANK_TOKEN,
+    INVALID_INT_ENV,
     PHONE,
     SESSION_MODE,
     SESSION_PATH,
@@ -66,6 +65,11 @@ def _effective_session_mode(session_mode: str, session_string: str) -> str:
 
 
 def _check_config() -> None:
+    if INVALID_INT_ENV:
+        logger.error(
+            f"Переменные должны быть целыми числами: {', '.join(INVALID_INT_ENV)}"
+        )
+        sys.exit(1)
     try:
         session_mode = _effective_session_mode(SESSION_MODE, SESSION_STRING)
     except ValueError as e:
@@ -113,43 +117,47 @@ async def main() -> None:
     logger.info(f"БД: {DB_PATH}")
 
     userbot = await _start_userbot()
-    me = await userbot.get_me()
-    logger.info(f"Userbot: {me.first_name} (@{me.username})")
-
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher(storage=MemoryStorage())
-
-    collector = ChatCollector(client=userbot, repo=repo)
-    watcher = MessageWatcher(client=userbot, repo=repo, bot=bot)
-    await watcher.start()
-
-    dp["repo"] = repo
-    dp["collector"] = collector
-    dp["watcher"] = watcher
-    dp["paypal"] = PayPalClient()
-    dp["monobank"] = MonobankClient(MONOBANK_TOKEN)
-    dp["started_at"] = datetime.now(timezone.utc)
-
-    dp.include_router(admin_users.router)
-    dp.include_router(common.router)
-    dp.include_router(billing.router)
-    dp.include_router(topics.router)
-    dp.include_router(keywords.router)
-    dp.include_router(history.router)
-    dp.include_router(feed.router)
-    dp.include_router(monitor.router)
-    dp.include_router(geo_filter.router)
-
-    webhook_runner = await start_payment_webhooks(bot, repo)
-    logger.info("Бот запускается...")
+    bot = None
+    watcher = None
+    webhook_runner = None
     try:
+        me = await userbot.get_me()
+        logger.info(f"Userbot: {me.first_name} (@{me.username})")
+
+        bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        dp = Dispatcher(storage=MemoryStorage())
+
+        collector = ChatCollector(client=userbot, repo=repo)
+        watcher = MessageWatcher(client=userbot, repo=repo, bot=bot)
+        await watcher.start()
+
+        dp["repo"] = repo
+        dp["collector"] = collector
+        dp["watcher"] = watcher
+        dp["paypal"] = PayPalClient()
+        dp["started_at"] = datetime.now(timezone.utc)
+
+        dp.include_router(admin_users.router)
+        dp.include_router(common.router)
+        dp.include_router(billing.router)
+        dp.include_router(topics.router)
+        dp.include_router(keywords.router)
+        dp.include_router(history.router)
+        dp.include_router(feed.router)
+        dp.include_router(monitor.router)
+        dp.include_router(geo_filter.router)
+
+        webhook_runner = await start_payment_webhooks(bot, repo)
+        logger.info("Бот запускается...")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         if webhook_runner:
             await webhook_runner.cleanup()
-        await watcher.stop()
+        if watcher:
+            await watcher.stop()
         await userbot.disconnect()
-        await bot.session.close()
+        if bot:
+            await bot.session.close()
         logger.info("Остановлен.")
 
 

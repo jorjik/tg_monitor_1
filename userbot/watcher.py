@@ -1,12 +1,14 @@
 import asyncio
 import html
 import logging
+import time
 from typing import Optional
 
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from telethon import TelegramClient, events
 
 logger = logging.getLogger(__name__)
+MONITORED_CACHE_TTL = 30.0
 
 
 class MessageWatcher:
@@ -16,6 +18,8 @@ class MessageWatcher:
         self.bot = bot
         self._running = False
         self._handler = None
+        self._monitored_cache: set[int] = set()
+        self._monitored_cache_at = 0.0
 
     @property
     def is_running(self) -> bool:
@@ -42,6 +46,14 @@ class MessageWatcher:
             self._handler = None
         logger.info("MessageWatcher: остановлен")
 
+    async def _is_monitored_chat(self, chat_id: int) -> bool:
+        """Быстрый предфильтр: не трогаем БД для неотслеживаемых чатов."""
+        now = time.monotonic()
+        if now - self._monitored_cache_at > MONITORED_CACHE_TTL:
+            self._monitored_cache = await self.repo.get_monitored_chat_ids()
+            self._monitored_cache_at = now
+        return chat_id in self._monitored_cache
+
     async def _send_notification(self, recipient_id: int, notification: str) -> None:
         for attempt in range(3):
             try:
@@ -64,6 +76,8 @@ class MessageWatcher:
             chat_id = event.chat_id
             text: str = event.message.message or ""
             if not text.strip():
+                return
+            if not await self._is_monitored_chat(chat_id):
                 return
             keywords_by_user = await self.repo.get_monitor_keywords_by_user(chat_id)
             if not keywords_by_user:

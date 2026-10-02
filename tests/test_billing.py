@@ -4,8 +4,6 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from aiogram.types import Chat, Message
-
 from bot.access import user_has_paid_access
 from bot.keyboards import (
     admin_payment_methods_kb,

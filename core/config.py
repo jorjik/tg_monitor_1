@@ -4,9 +4,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+INVALID_INT_ENV: list[str] = []
+
+
 def _int_env(name: str, default: int = 0) -> int:
     value = os.getenv(name, "").strip()
-    return int(value) if value else default
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        INVALID_INT_ENV.append(name)
+        return default
 
 
 API_ID: int = _int_env("API_ID")
@@ -39,3 +48,5 @@ MONOBANK_ACCOUNT_ID: str = os.getenv("MONOBANK_ACCOUNT_ID", "").strip()
 MONOBANK_CURRENCY: str = os.getenv("MONOBANK_CURRENCY", "UAH").strip().upper()
 MONOBANK_AMOUNT_PER_STAR: str = os.getenv("MONOBANK_AMOUNT_PER_STAR", "10").strip()
 MONOBANK_WEBHOOK_PATH: str = os.getenv("MONOBANK_WEBHOOK_PATH", "/webhooks/monobank").strip()
+MONOBANK_WEBHOOK_SECRET: str = os.getenv("MONOBANK_WEBHOOK_SECRET", "").strip()
+MONOBANK_CARD: str = os.getenv("MONOBANK_CARD", "").strip()

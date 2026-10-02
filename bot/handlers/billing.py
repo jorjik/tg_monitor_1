@@ -21,7 +21,6 @@ from bot.keyboards import (
     subscription_kb,
 )
 from bot.kofi import kofi_amount_for_tariff
-from bot.monobank import MonobankClient
 from bot.paypal import PayPalClient
 from bot.states import BillingAdminForm
 from core.config import (
@@ -30,6 +29,7 @@ from core.config import (
     KO_FI_CURRENCY,
     KO_FI_PAGE_URL,
     MONOBANK_AMOUNT_PER_STAR,
+    MONOBANK_CARD,
     MONOBANK_CURRENCY,
     PAYPAL_AMOUNT_PER_STAR,
     PAYPAL_CURRENCY,
@@ -44,29 +44,6 @@ PAYMENT_METHOD_LABELS = {
     "kofi": "Ko-fi",
     "paypal": "PayPal",
 }
-
-
-def _payload(user_tg_id: int, tariff: dict) -> str:
-    return (
-        f"subscription:{user_tg_id}:{tariff['id']}:"
-        f"{tariff['stars']}:{tariff['duration_days']}"
-    )
-
-
-def _parse_payload(value: str) -> tuple[int, int, int, int] | None:
-    parts = value.split(":", 4)
-    if len(parts) != 5 or parts[0] != "subscription":
-        return None
-    try:
-        user_tg_id = int(parts[1])
-        tariff_id = int(parts[2])
-        stars = int(parts[3])
-        duration_days = int(parts[4])
-    except ValueError:
-        return None
-    if stars <= 0 or duration_days <= 0:
-        return None
-    return user_tg_id, tariff_id, stars, duration_days
 
 
 def _access_text(access: dict) -> str:
@@ -292,7 +269,15 @@ async def cb_billing_paypal(callback: CallbackQuery, repo: Repository, paypal: P
 @router.callback_query(F.data.startswith("paypal_check:"))
 async def cb_paypal_check(callback: CallbackQuery, repo: Repository, paypal: PayPalClient):
     order_id = callback.data.split(":")[1]
-    
+
+    payment = await repo.get_paypal_payment(order_id)
+    if not payment or (
+        payment["user_tg_id"] != callback.from_user.id
+        and not is_admin(callback.from_user.id)
+    ):
+        await callback.answer("Заказ не найден.", show_alert=True)
+        return
+
     # Check current status
     order = await paypal.get_order(order_id)
     if not order:
@@ -353,6 +338,13 @@ async def cb_billing_monobank(callback: CallbackQuery, repo: Repository):
         await callback.answer("Сообщение недоступно.", show_alert=True)
         return
 
+    if not MONOBANK_CARD:
+        await callback.answer(
+            "Monobank не настроен: администратор не задал MONOBANK_CARD.",
+            show_alert=True,
+        )
+        return
+
     try:
         # Рассчитываем сумму в копейках/центах
         amount_per_star = float(MONOBANK_AMOUNT_PER_STAR)
@@ -389,7 +381,7 @@ async def cb_billing_monobank(callback: CallbackQuery, repo: Repository):
         "<b>Инструкция:</b>\n"
         "1. Откройте приложение Monobank\n"
         "2. Переведите указанную сумму на карту:\n"
-        f"   <code>5375414122814957</code>\n\n"
+        f"   <code>{html.escape(MONOBANK_CARD)}</code>\n\n"
         "3. <b>Обязательно</b> укажите в комментарии ваш код:\n"
         f"   <code>{html.escape(intent['code'])}</code>\n\n"
         "После перевода бот автоматически активирует подписку через webhook.\n"

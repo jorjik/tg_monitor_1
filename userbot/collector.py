@@ -224,6 +224,12 @@ class ChatCollector:
         try:
             return await self.client(SearchRequest(q=term, limit=limit))
         except FloodWaitError as e:
+            if e.seconds > MAX_FLOOD_WAIT_SECONDS:
+                logger.warning(
+                    f"FloodWait {e.seconds}s превышает лимит "
+                    f"{MAX_FLOOD_WAIT_SECONDS}s на «{term}», пропускаем слово"
+                )
+                raise
             logger.warning(f"FloodWait {e.seconds}s на «{term}»")
             await asyncio.sleep(e.seconds + 1)
             return await self.client(SearchRequest(q=term, limit=limit))

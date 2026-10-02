@@ -1,3 +1,4 @@
+import hmac
 import html
 import json
 import logging
@@ -29,7 +30,7 @@ async def handle_kofi_webhook(request: web.Request) -> web.Response:
         payment = parse_kofi_webhook_payload(payload)
     except (json.JSONDecodeError, ValueError):
         return web.json_response({"ok": False, "error": "invalid_payload"}, status=400)
-    if payment.verification_token != KO_FI_VERIFICATION_TOKEN:
+    if not hmac.compare_digest(payment.verification_token, KO_FI_VERIFICATION_TOKEN):
         return web.json_response({"ok": False, "error": "invalid_token"}, status=403)
 
     result = await repo.record_kofi_payment(

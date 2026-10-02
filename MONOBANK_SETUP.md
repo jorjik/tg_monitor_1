@@ -17,6 +17,8 @@ MONOBANK_ACCOUNT_ID=0
 MONOBANK_CURRENCY=UAH
 MONOBANK_AMOUNT_PER_STAR=10
 MONOBANK_WEBHOOK_PATH=/webhooks/monobank
+MONOBANK_WEBHOOK_SECRET=длинный_случайный_секрет
+MONOBANK_CARD=ваш_номер_карты
 ```
 
 ### Пояснения:
@@ -25,6 +27,8 @@ MONOBANK_WEBHOOK_PATH=/webhooks/monobank
 - `MONOBANK_CURRENCY` - валюта (UAH, USD, EUR)
 - `MONOBANK_AMOUNT_PER_STAR` - цена 1 звезды в гривнах (10 грн = 1 звезда)
 - `MONOBANK_WEBHOOK_PATH` - путь для webhook (используется общий порт с Ko-fi)
+- `MONOBANK_WEBHOOK_SECRET` - **обязательный** секрет, добавляется в конец URL вебхука. Без него маршрут Monobank не поднимается, чтобы вебхук нельзя было подделать.
+- `MONOBANK_CARD` - номер карты, который бот показывает пользователю для перевода.
 
 ## 3. Настройка webhook в Monobank
 
@@ -40,8 +44,8 @@ from core.config import MONOBANK_TOKEN
 async def main():
     client = MonobankClient(MONOBANK_TOKEN)
     
-    # Замените на ваш публичный URL
-    webhook_url = "https://ваш-домен.com/webhooks/monobank"
+    # Замените на ваш публичный URL (в конце — секрет из MONOBANK_WEBHOOK_SECRET)
+    webhook_url = "https://ваш-домен.com/webhooks/monobank/длинный_случайный_секрет"
     
     success = await client.set_webhook(webhook_url)
     if success:
@@ -64,7 +68,7 @@ python setup_monobank_webhook.py
 curl -X POST https://api.monobank.ua/personal/webhook \
   -H "X-Token: ваш_токен" \
   -H "Content-Type: application/json" \
-  -d '{"webHookUrl": "https://ваш-домен.com/webhooks/monobank"}'
+  -d '{"webHookUrl": "https://ваш-домен.com/webhooks/monobank/длинный_случайный_секрет"}'
 ```
 
 ## 4. Получение ID счета (опционально)
@@ -99,7 +103,7 @@ Webhook должен быть доступен из интернета по HTTP
 
 **Важно:** Ko-fi и Monobank webhook работают на **одном порту** (8080):
 - Ko-fi: `https://ваш-домен.com/webhooks/kofi`
-- Monobank: `https://ваш-домен.com/webhooks/monobank`
+- Monobank: `https://ваш-домен.com/webhooks/monobank/длинный_случайный_секрет`
 
 ### Локальная разработка (ngrok):
 
@@ -118,7 +122,7 @@ https://ваш-проект.up.railway.app
 
 Webhook будет доступен по адресу:
 ```
-https://ваш-проект.up.railway.app/webhooks/monobank
+https://ваш-проект.up.railway.app/webhooks/monobank/длинный_случайный_секрет
 ```
 
 ### Продакшн (nginx):
@@ -152,7 +156,7 @@ server {
 
 1. Выберите тариф с оплатой через Monobank
 2. Получите код платежа (например, `MB-A1B2C3D4`)
-3. Переведите тестовую сумму на карту `5375414122814957`
+3. Переведите тестовую сумму на карту из `MONOBANK_CARD`
 4. В комментарии укажите код `MB-A1B2C3D4`
 5. Бот должен автоматически активировать подписку
 
@@ -170,7 +174,7 @@ server {
 
 1. Проверьте, что порт 8080 открыт (единый для Ko-fi и Monobank)
 2. Проверьте логи: `tail -f data/monitor.log`
-3. Убедитесь, что URL доступен извне: `curl https://ваш-домен.com/webhooks/monobank`
+3. Убедитесь, что URL доступен извне: `curl https://ваш-домен.com/webhooks/monobank/длинный_случайный_секрет`
 4. Проверьте, что оба webhook запустились: в логах должно быть "Payment webhooks started"
 
 ### Платежи не находятся

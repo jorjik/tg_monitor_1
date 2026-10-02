@@ -14,6 +14,8 @@
 MONOBANK_TOKEN=ваш_токен
 MONOBANK_CURRENCY=UAH
 MONOBANK_AMOUNT_PER_STAR=10
+MONOBANK_WEBHOOK_SECRET=длинный_случайный_секрет
+MONOBANK_CARD=ваш_номер_карты
 ```
 
 ## 3. Задеплойте на Railway
@@ -22,7 +24,7 @@ Railway автоматически пересоберет и запустит б
 
 Ваш webhook будет доступен по адресу:
 ```
-https://ваш-проект.up.railway.app/webhooks/monobank
+https://ваш-проект.up.railway.app/webhooks/monobank/<MONOBANK_WEBHOOK_SECRET>
 ```
 
 ## 4. Установите webhook в Monobank
@@ -57,7 +59,7 @@ python setup_monobank_webhook.py
 ```
 Payment webhooks started on http://0.0.0.0:8080
   Ko-fi:     /webhooks/kofi
-  Monobank:  /webhooks/monobank
+  Monobank:  /webhooks/monobank/<MONOBANK_WEBHOOK_SECRET>
 ```
 
 ## Важно

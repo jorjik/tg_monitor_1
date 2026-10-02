@@ -1,6 +1,9 @@
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from core.config import INVALID_INT_ENV, _int_env
 from main import _effective_session_mode
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +19,17 @@ class RuntimeConfigTest(unittest.TestCase):
     def test_effective_session_mode_rejects_unknown_values(self):
         with self.assertRaises(ValueError):
             _effective_session_mode("bad", "")
+
+    def test_valid_int_env_is_parsed(self):
+        with mock.patch.dict(os.environ, {"SOME_INT": "42"}):
+            self.assertEqual(_int_env("SOME_INT", 7), 42)
+
+    def test_invalid_int_env_falls_back_and_is_recorded(self):
+        with mock.patch.dict(os.environ, {"SOME_INT": "abc"}):
+            before = len(INVALID_INT_ENV)
+            self.assertEqual(_int_env("SOME_INT", 7), 7)
+            self.assertEqual(len(INVALID_INT_ENV), before + 1)
+            self.assertIn("SOME_INT", INVALID_INT_ENV)
 
     def test_env_example_uses_api_id_key(self):
         with open(REPO_ROOT / ".env.example", encoding="utf-8") as f:
